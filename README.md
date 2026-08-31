@@ -28,9 +28,10 @@ and permitted data access against systems the operator is allowed to use.
 
 ## Status
 
-Early development. The package scaffold and CLI entry point exist. The capture,
-analysis, generation, and verification stages described above are not implemented yet.
-The Roadmap and Ticket Board below track what is real and what is planned.
+Early development. The package scaffold, the CLI entry point, and the core traffic
+models exist. The capture, analysis, generation, and verification stages described above
+are not implemented yet. The Roadmap and Ticket Board below track what is real and what
+is planned.
 
 ## Installation
 
@@ -73,6 +74,10 @@ $ trace2api version
 
 - Installable `trace2api` package with a `src/` layout.
 - `trace2api --help` and `trace2api version`.
+- Typed traffic models for requests, responses, headers, query parameters, bodies,
+  timings, entries, and capture metadata, with case insensitive header lookup, URL
+  derived query parameters, validation of what cannot be replayed later, and JSON round
+  tripping.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -152,8 +157,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-001 | Package scaffold and CLI entry point. `trace2api --help`, tests, and CI work. | Done | |
-| T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Ready | T2A-001 |
-| T2A-003 | Secret redaction before persistence or display, with focused tests. | Backlog | T2A-002 |
+| T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Done | T2A-001 |
+| T2A-003 | Secret redaction before persistence or display, with focused tests. | Ready | T2A-002 |
 
 ### Phase 1: HAR to code
 
@@ -170,7 +175,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-010 | Browser Fetch/XHR recorder using Playwright or CDP. | Backlog | T2A-002 |
+| T2A-010 | Browser Fetch/XHR recorder using Playwright or CDP. | Ready | T2A-002 |
 | T2A-011 | `trace2api record` produces a sanitized inspectable local capture. | Backlog | T2A-010, T2A-003 |
 | T2A-012 | Capture summary with total requests, filtered noise, likely application requests, and content types. | Backlog | T2A-011, T2A-005 |
 
@@ -235,14 +240,20 @@ src/trace2api/
     __init__.py
     __main__.py
     cli.py
+    models.py
 tests/
 ```
+
+`models.py` holds the traffic models the rest of the project is built on. Captures are
+treated as evidence: the models are frozen, so a stage that needs to change something
+produces a new object rather than editing the record of what was observed.
 
 Further modules (`sanitize/`, `capture/`, `analyze/`, `generate/`, `replay/`) are added
 as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-08-31 - Added the core traffic models covering requests, responses, headers, query parameters, bodies, timings, and capture metadata.
 - 2026-08-31 - Added the installable package scaffold, the `trace2api` CLI entry point, and CI running format, lint, and test checks on Python 3.12.
 
 ## License
