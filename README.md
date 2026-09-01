@@ -28,9 +28,9 @@ and permitted data access against systems the operator is allowed to use.
 
 ## Status
 
-Early development. The package scaffold, the CLI entry point, and the core traffic
-models exist. The capture, analysis, generation, and verification stages described above
-are not implemented yet. The Roadmap and Ticket Board below track what is real and what
+Early development. The package scaffold, the CLI entry point, the core traffic models,
+and credential redaction exist. The capture, analysis, generation, and verification
+stages described above are not implemented yet. The Roadmap and Ticket Board below track what is real and what
 is planned.
 
 ## Installation
@@ -78,6 +78,10 @@ $ trace2api version
   timings, entries, and capture metadata, with case insensitive header lookup, URL
   derived query parameters, validation of what cannot be replayed later, and JSON round
   tripping.
+- Credential redaction over a capture, covering credential headers, cookie values,
+  `Authorization` style values, credential named query parameters, JSON and form fields,
+  URL userinfo, and token shaped values, with a report of what was removed by location
+  and rule.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -100,7 +104,15 @@ functionality lands.
 Captures contain credentials by nature. Trace2API treats that as a primary constraint:
 
 - Secrets are redacted before anything is persisted, displayed, logged, or written into
-  a generated client.
+  a generated client. A secret is replaced by a placeholder rather than deleted, so a
+  token reused across several requests still reads as one value to the analysis stages
+  while the value itself is gone.
+- Redaction is name based and shape based, so every removal can be explained by the rule
+  that caused it. It reports what it removed by location and rule, never by value.
+- Bodies that cannot be parsed, such as binary payloads and unknown text formats, are
+  left as observed rather than blanked, because the analysis stages read them. A secret
+  in such a body is removed only where it also appears in a header, a query string, or a
+  structured field.
 - Generated clients read secrets from environment variables rather than embedding them.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
@@ -158,13 +170,13 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-001 | Package scaffold and CLI entry point. `trace2api --help`, tests, and CI work. | Done | |
 | T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Done | T2A-001 |
-| T2A-003 | Secret redaction before persistence or display, with focused tests. | Ready | T2A-002 |
+| T2A-003 | Secret redaction before persistence or display, with focused tests. | Done | T2A-002 |
 
 ### Phase 1: HAR to code
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-004 | HAR 1.2 importer into internal models with clear validation errors. | Backlog | T2A-002, T2A-003 |
+| T2A-004 | HAR 1.2 importer into internal models with clear validation errors. | Ready | T2A-002, T2A-003 |
 | T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Backlog | T2A-004 |
 | T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Backlog | T2A-005 |
 | T2A-007 | Sanitized runnable cURL generator. | Backlog | T2A-004, T2A-003 |
@@ -241,6 +253,9 @@ src/trace2api/
     __main__.py
     cli.py
     models.py
+    sanitize/
+        policy.py
+        redact.py
 tests/
 ```
 
@@ -248,11 +263,16 @@ tests/
 treated as evidence: the models are frozen, so a stage that needs to change something
 produces a new object rather than editing the record of what was observed.
 
-Further modules (`sanitize/`, `capture/`, `analyze/`, `generate/`, `replay/`) are added
-as the tickets that need them land.
+`sanitize/` removes credentials from a capture. `policy.py` decides what counts as one,
+`redact.py` rewrites the capture and records what it took out. Every stage that persists
+or displays a capture passes it through `redact_capture` first.
+
+Further modules (`capture/`, `analyze/`, `generate/`, `replay/`) are added as the tickets
+that need them land.
 
 ## Recent Progress
 
+- 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
 - 2026-08-31 - Added the core traffic models covering requests, responses, headers, query parameters, bodies, timings, and capture metadata.
 - 2026-08-31 - Added the installable package scaffold, the `trace2api` CLI entry point, and CI running format, lint, and test checks on Python 3.12.
 
