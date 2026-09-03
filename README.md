@@ -29,9 +29,10 @@ and permitted data access against systems the operator is allowed to use.
 ## Status
 
 Early development. The package scaffold, the CLI entry point, the core traffic models,
-credential redaction, and HAR import exist. The analysis, generation, and verification
-stages described above are not implemented yet, and no command exposes HAR import yet.
-The Roadmap and Ticket Board below track what is real and what is planned.
+credential redaction, HAR import, and relevance filtering exist. The remaining analysis,
+generation, and verification stages described above are not implemented yet, and no
+command exposes any of this yet. The Roadmap and Ticket Board below track what is real
+and what is planned.
 
 ## Installation
 
@@ -86,6 +87,10 @@ $ trace2api version
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them. Available as a library function; no command
   exposes it yet.
+- Relevance filtering that separates page assets, analytics hosts, and reporting
+  endpoints from likely application requests, with every verdict naming the rule behind
+  it and what the rule matched. Requests no rule recognizes are kept rather than dropped.
+  Available as a library function; no command exposes it yet.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -181,8 +186,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-004 | HAR 1.2 importer into internal models with clear validation errors. | Done | T2A-002, T2A-003 |
-| T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Ready | T2A-004 |
-| T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Backlog | T2A-005 |
+| T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Done | T2A-004 |
+| T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Ready | T2A-005 |
 | T2A-007 | Sanitized runnable cURL generator. | Ready | T2A-004, T2A-003 |
 | T2A-008 | Sanitized runnable Python `httpx` generator. | Backlog | T2A-007 |
 | T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Backlog | T2A-007 |
@@ -257,6 +262,8 @@ src/trace2api/
     __main__.py
     cli.py
     models.py
+    analyze/
+        relevance.py
     capture/
         har.py
     sanitize/
@@ -278,11 +285,15 @@ whatever was observed.
 `redact.py` rewrites the capture and records what it took out. Every stage that persists
 or displays a capture passes it through `redact_capture` first.
 
-Further modules (`analyze/`, `generate/`, `replay/`) are added as the tickets that need
-them land.
+`analyze/` works out what a capture means. `relevance.py` is the first step: it decides
+which requests carry the workflow and which are page furniture, and records the rule
+behind each verdict so the reasoning can be read rather than trusted.
+
+Further modules (`generate/`, `replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
 - 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
 - 2026-08-31 - Added the core traffic models covering requests, responses, headers, query parameters, bodies, timings, and capture metadata.
