@@ -28,11 +28,10 @@ and permitted data access against systems the operator is allowed to use.
 
 ## Status
 
-Early development. The package scaffold, the CLI entry point, the core traffic models,
-credential redaction, HAR import, and relevance filtering exist. The remaining analysis,
-generation, and verification stages described above are not implemented yet, and no
-command exposes any of this yet. The Roadmap and Ticket Board below track what is real
-and what is planned.
+Early development. A HAR archive can be imported, redacted, and inspected from the
+command line. The inference, generation, replay, and verification stages described above
+are not implemented yet. The Roadmap and Ticket Board below track what is real and what
+is planned.
 
 ## Installation
 
@@ -50,31 +49,68 @@ Python 3.12 or newer is required.
 
 ## Quick start
 
-Today the CLI exposes its entry point and reports its version. That is the whole of it.
+Export a HAR archive from the browser devtools network panel, or use the synthetic one
+in this repository, and look at what it holds:
 
 ```console
-$ trace2api --help
+$ trace2api inspect examples/storefront-orders.har
+Capture: 8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Hosts: cdn.example.com, shop.example.com, www.google-analytics.com
 
- Usage: trace2api [OPTIONS] COMMAND [ARGS]...
+#  METHOD  HOST              PATH                         STATUS  TYPE      RELEVANCE
+1  GET     shop.example.com  /orders                      200     document  unknown
+4  GET     shop.example.com  /api/v1/orders               200     xhr       application
+6  GET     shop.example.com  /api/v1/orders/4711          200     xhr       application
+7  POST    shop.example.com  /api/v1/orders/4711/confirm  201     fetch     application
 
- Turn observed browser network workflows into clean, reusable direct HTTP
- client code. Analysis runs locally.
-
-╭─ Options ────────────────────────────────────────────────────────────────────╮
-│ --help          Show this message and exit.                                  │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ Commands ───────────────────────────────────────────────────────────────────╮
-│ version  Print the installed Trace2API version.                              │
-╰──────────────────────────────────────────────────────────────────────────────╯
-
-$ trace2api version
-0.0.1
+Showing 4 of 8 requests: 3 application, 1 unknown, 4 noise.
+Filtered as noise (3 asset-resource-type, 1 analytics-host). Pass --all to list them.
+Redacted 6 values before displaying this.
 ```
+
+Eight recorded requests, four worth reading. The numbering is the position in the
+capture, so the four that were filtered are still accounted for rather than renumbered
+away.
+
+Nothing here is taken on trust. `--all` lists the filtered requests as well, and
+`--explain` names the rule behind every verdict:
+
+```console
+$ trace2api inspect examples/storefront-orders.har --all --explain
+Capture: 8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Hosts: cdn.example.com, shop.example.com, www.google-analytics.com
+
+#  METHOD  HOST                      PATH                         STATUS  TYPE        RELEVANCE    WHY
+1  GET     shop.example.com          /orders                      200     document    unknown      a page document, which may carry values later requests reuse
+2  GET     cdn.example.com           /static/app.4f2b91.css       200     stylesheet  noise        the browser loaded it as a page asset: stylesheet
+3  GET     cdn.example.com           /static/app.4f2b91.js        200     script      noise        the browser loaded it as a page asset: script
+4  GET     shop.example.com          /api/v1/orders               200     xhr         application  path names an API surface: api
+5  POST    www.google-analytics.com  /collect                     204     xhr         noise        sent to an analytics or crash reporting host: google-analytics.com
+6  GET     shop.example.com          /api/v1/orders/4711          200     xhr         application  path names an API surface: api
+7  POST    shop.example.com          /api/v1/orders/4711/confirm  201     fetch       application  path names an API surface: api
+8  GET     cdn.example.com           /img/logo.png                200     image       noise        the browser loaded it as a page asset: image
+
+Showing 8 of 8 requests: 3 application, 1 unknown, 4 noise.
+Redacted 6 values before displaying this.
+```
+
+`--json` writes the same account as a JSON document, including the filtered requests, for
+feeding into something else.
+
+Credentials are redacted before any of this is printed, and query strings are left out of
+the table, so the output can go into an issue or a report as it stands.
 
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
 - `trace2api --help` and `trace2api version`.
+- `trace2api inspect CAPTURE` reads a HAR archive, redacts it, and lists each request by
+  method, host, path, status, resource type, and relevance, with the noise summarized
+  rather than printed. `--all` lists the filtered requests, `--explain` names the rule
+  behind each verdict, and `--json` writes the same account as a JSON document. Query
+  strings are never rendered.
+- A synthetic capture at `examples/storefront-orders.har` that the quick start above
+  runs against.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
   timings, entries, and capture metadata, with case insensitive header lookup, URL
   derived query parameters, validation of what cannot be replayed later, and JSON round
@@ -85,12 +121,10 @@ $ trace2api version
   and rule.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
-  position in the archive that caused them. Available as a library function; no command
-  exposes it yet.
+  position in the archive that caused them.
 - Relevance filtering that separates page assets, analytics hosts, and reporting
   endpoints from likely application requests, with every verdict naming the rule behind
   it and what the rule matched. Requests no rule recognizes are kept rather than dropped.
-  Available as a library function; no command exposes it yet.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -122,6 +156,8 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   left as observed rather than blanked, because the analysis stages read them. A secret
   in such a body is removed only where it also appears in a header, a query string, or a
   structured field.
+- Nothing printed by a command carries a query string. Query strings routinely hold
+  tokens and identifiers, and an endpoint is recognizable from its path alone.
 - Generated clients read secrets from environment variables rather than embedding them.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
@@ -187,7 +223,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-004 | HAR 1.2 importer into internal models with clear validation errors. | Done | T2A-002, T2A-003 |
 | T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Done | T2A-004 |
-| T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Ready | T2A-005 |
+| T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Done | T2A-005 |
 | T2A-007 | Sanitized runnable cURL generator. | Ready | T2A-004, T2A-003 |
 | T2A-008 | Sanitized runnable Python `httpx` generator. | Backlog | T2A-007 |
 | T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Backlog | T2A-007 |
@@ -261,6 +297,7 @@ src/trace2api/
     __init__.py
     __main__.py
     cli.py
+    inspection.py
     models.py
     analyze/
         relevance.py
@@ -269,6 +306,7 @@ src/trace2api/
     sanitize/
         policy.py
         redact.py
+examples/
 tests/
 ```
 
@@ -289,10 +327,19 @@ or displays a capture passes it through `redact_capture` first.
 which requests carry the workflow and which are page furniture, and records the rule
 behind each verdict so the reasoning can be read rather than trusted.
 
+`inspection.py` turns a capture into what a command prints: it redacts first, then
+classifies, then renders. Keeping that order in one place means no command can display a
+capture that has not been through redaction.
+
+`examples/` holds synthetic archives written for this repository. They contain no real
+host, credential, or personal data, and the tests read them so the output shown above
+stays true.
+
 Further modules (`generate/`, `replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
 - 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
