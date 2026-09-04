@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Annotated
+
 import typer
 
 from trace2api import __version__
+from trace2api.capture import HarImportError, load_har
+from trace2api.inspection import inspect_capture, render_inspection
 
 app = typer.Typer(
     name="trace2api",
@@ -16,16 +21,67 @@ app = typer.Typer(
     add_completion=False,
 )
 
+BAD_CAPTURE_EXIT_CODE = 2
+"""Exit code used when a capture cannot be read, kept apart from an ordinary failure."""
+
 
 @app.callback()
 def cli() -> None:
-    """Keep Trace2API a command group even while only one command exists."""
+    """Group the Trace2API commands under one entry point."""
 
 
 @app.command()
 def version() -> None:
     """Print the installed Trace2API version."""
     typer.echo(__version__)
+
+
+@app.command()
+def inspect(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a HAR 1.2 archive recorded from a browser session.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help=(
+                "List the requests filtered as noise as well. The JSON report always includes them."
+            ),
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each relevance verdict."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the inspection as JSON instead of a table."),
+    ] = False,
+) -> None:
+    """Show what a capture contains: method, host, path, status, type, and relevance.
+
+    Credentials are redacted before anything is printed, and query strings are left out,
+    so the output can be pasted into a report or an issue.
+    """
+    try:
+        recorded = load_har(capture)
+    except HarImportError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=BAD_CAPTURE_EXIT_CODE) from None
+    inspection = inspect_capture(recorded)
+    if as_json:
+        typer.echo(inspection.as_json())
+        return
+    typer.echo(
+        render_inspection(inspection, include_noise=include_noise, explain=explain), nl=False
+    )
 
 
 def main() -> None:

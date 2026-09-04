@@ -17,6 +17,9 @@ htmlcov/
 # Captures and other material that must never be committed
 *.har
 captures/
+# Exception: the synthetic archives under examples/ are written for this repository and
+# contain no real host, credential, or personal data.
+!examples/*.har
 .env
 .env.*
 browser-profiles/
