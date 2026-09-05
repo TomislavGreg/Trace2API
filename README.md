@@ -28,10 +28,10 @@ and permitted data access against systems the operator is allowed to use.
 
 ## Status
 
-Early development. A HAR archive can be imported, redacted, and inspected from the
-command line. The inference, generation, replay, and verification stages described above
-are not implemented yet. The Roadmap and Ticket Board below track what is real and what
-is planned.
+Early development. A HAR archive can be imported, redacted, inspected, and written out
+as a runnable cURL client from the command line. The Python and JavaScript targets, and
+the inference, replay, and verification stages described above, are not implemented yet.
+The Roadmap and Ticket Board below track what is real and what is planned.
 
 ## Installation
 
@@ -100,6 +100,66 @@ feeding into something else.
 Credentials are redacted before any of this is printed, and query strings are left out of
 the table, so the output can go into an issue or a report as it stands.
 
+Once the capture reads correctly, write those requests out as a client:
+
+```console
+$ trace2api generate examples/storefront-orders.har
+#!/bin/sh
+# Direct client for a workflow recorded 2026-09-04T09:15:00+00:00 (source: har).
+# Reproducing 4 of 8 captured requests.
+#
+# Credentials were removed from the capture. Export them before running:
+#   TRACE2API_AUTHORIZATION   request.headers.authorization
+#   TRACE2API_COOKIE_SESSION  request.headers.cookie[session]
+#   TRACE2API_COOKIE_LOCALE   request.headers.cookie[locale]
+#   TRACE2API_X_CSRF_TOKEN    request.headers.x-csrf-token
+set -eu
+
+# 1  GET https://shop.example.com/orders
+curl 'https://shop.example.com/orders' \
+  --header 'Accept: text/html,application/xhtml+xml' \
+  --header 'User-Agent: Mozilla/5.0 (X11; Linux x86_64)'
+
+# 4  GET https://shop.example.com/api/v1/orders
+curl 'https://shop.example.com/api/v1/orders?status=open&limit=20' \
+  --header 'Accept: application/json' \
+  --header 'Authorization: Bearer '"$TRACE2API_AUTHORIZATION" \
+  --header 'Cookie: session='"$TRACE2API_COOKIE_SESSION"'; locale='"$TRACE2API_COOKIE_LOCALE"
+
+# 6  GET https://shop.example.com/api/v1/orders/4711
+curl 'https://shop.example.com/api/v1/orders/4711' \
+  --header 'Accept: application/json' \
+  --header 'Authorization: Bearer '"$TRACE2API_AUTHORIZATION"
+
+# 7  POST https://shop.example.com/api/v1/orders/4711/confirm
+curl 'https://shop.example.com/api/v1/orders/4711/confirm' \
+  --request POST \
+  --header 'Accept: application/json' \
+  --header 'Content-Type: application/json' \
+  --header 'Authorization: Bearer '"$TRACE2API_AUTHORIZATION" \
+  --header 'X-CSRF-Token: '"$TRACE2API_X_CSRF_TOKEN" \
+  --data-raw '{"payment_method":"invoice","confirmation_ref":"CNF-4711-88"}'
+```
+
+The token, the session cookie, and the CSRF value the browser sent are not in there. Each
+one became a reference to an environment variable named after where it came from, so the
+script can be committed, reviewed, and shared while the values stay in the environment
+that runs it. `set -eu` stops the script rather than sending a request with an empty
+credential.
+
+The numbering matches `inspect`, so a command can be traced back to the exchange it came
+from. Requests keep their query strings here, unlike the inspection table: a client that
+drops them does not reproduce the workflow, and the credentials that hide in a query
+string have already been replaced.
+
+Redirect it to a file, export the variables it lists, and run it:
+
+```console
+$ trace2api generate examples/storefront-orders.har > orders.sh
+$ export TRACE2API_AUTHORIZATION=... TRACE2API_COOKIE_SESSION=...
+$ sh orders.sh
+```
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -109,6 +169,13 @@ the table, so the output can go into an issue or a report as it stands.
   rather than printed. `--all` lists the filtered requests, `--explain` names the rule
   behind each verdict, and `--json` writes the same account as a JSON document. Query
   strings are never rendered.
+- `trace2api generate CAPTURE` writes the requests a capture holds as a runnable cURL
+  script on standard output, numbered as `inspect` numbers them. Every credential becomes
+  a reference to an environment variable named after where the value came from, listed at
+  the top of the script. Headers curl derives for itself are left out with the rule behind
+  each omission stated, and a request the script cannot reproduce faithfully, such as one
+  with a binary body, says so rather than sending something else. `--all` writes the
+  filtered requests too.
 - A synthetic capture at `examples/storefront-orders.har` that the quick start above
   runs against.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
@@ -156,8 +223,10 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   left as observed rather than blanked, because the analysis stages read them. A secret
   in such a body is removed only where it also appears in a header, a query string, or a
   structured field.
-- Nothing printed by a command carries a query string. Query strings routinely hold
-  tokens and identifiers, and an endpoint is recognizable from its path alone.
+- Nothing an inspection prints carries a query string. Query strings routinely hold
+  tokens and identifiers, and an endpoint is recognizable from its path alone. A
+  generated client is the deliberate exception: it carries the whole URL because it has
+  to reproduce the request, and the credentials in it are already variable references.
 - Generated clients read secrets from environment variables rather than embedding them.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
@@ -224,9 +293,9 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-004 | HAR 1.2 importer into internal models with clear validation errors. | Done | T2A-002, T2A-003 |
 | T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Done | T2A-004 |
 | T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Done | T2A-005 |
-| T2A-007 | Sanitized runnable cURL generator. | Ready | T2A-004, T2A-003 |
-| T2A-008 | Sanitized runnable Python `httpx` generator. | Backlog | T2A-007 |
-| T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Backlog | T2A-007 |
+| T2A-007 | Sanitized runnable cURL generator. | Done | T2A-004, T2A-003 |
+| T2A-008 | Sanitized runnable Python `httpx` generator. | Ready | T2A-007 |
+| T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Ready | T2A-007 |
 
 ### Phase 2: Live capture
 
@@ -303,6 +372,9 @@ src/trace2api/
         relevance.py
     capture/
         har.py
+    generate/
+        curl.py
+        secrets.py
     sanitize/
         policy.py
         redact.py
@@ -327,6 +399,12 @@ or displays a capture passes it through `redact_capture` first.
 which requests carry the workflow and which are page furniture, and records the rule
 behind each verdict so the reasoning can be read rather than trusted.
 
+`generate/` writes an analyzed capture out as ordinary source code. Each target renders
+the same requests in a different language, and they share two rules: the capture is
+redacted before a line is written, and every secret becomes a reference to an environment
+variable. `secrets.py` decides what those variables are called and reports where each
+value came from. `curl.py` is the first target.
+
 `inspection.py` turns a capture into what a command prints: it redacts first, then
 classifies, then renders. Keeping that order in one place means no command can display a
 capture that has not been through redaction.
@@ -335,10 +413,11 @@ capture that has not been through redaction.
 host, credential, or personal data, and the tests read them so the output shown above
 stays true.
 
-Further modules (`generate/`, `replay/`) are added as the tickets that need them land.
+Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
