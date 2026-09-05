@@ -17,8 +17,10 @@ from trace2api.sanitize.redact import (
     Redaction,
     RedactionReport,
     RedactionResult,
+    SecretSegment,
     is_redacted,
     redact_capture,
+    split_secrets,
 )
 
 __all__ = [
@@ -26,10 +28,12 @@ __all__ = [
     "RedactionReport",
     "RedactionResult",
     "RedactionRule",
+    "SecretSegment",
     "is_jwt_shaped",
     "is_redacted",
     "is_sensitive_header",
     "is_sensitive_name",
     "is_sensitive_query_name",
     "redact_capture",
+    "split_secrets",
 ]

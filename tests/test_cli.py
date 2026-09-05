@@ -39,6 +39,7 @@ def test_help_lists_the_commands() -> None:
     output = _unwrapped(runner.invoke(app, ["--help"]).output)
     assert "version" in output
     assert "inspect" in output
+    assert "generate" in output
 
 
 def test_no_arguments_shows_help() -> None:
@@ -154,3 +155,66 @@ class TestInspectCommand:
         result = runner.invoke(app, ["inspect", str(EXAMPLE_HAR), *arguments])
         assert result.exit_code == 0
         assert "shop.example.com" in result.stdout
+
+
+class TestGenerateCommand:
+    def test_writes_a_curl_script_for_the_application_requests(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        result = runner.invoke(app, ["generate", str(archive)])
+        assert result.exit_code == 0
+        assert result.stdout.startswith("#!/bin/sh\n")
+        assert "curl 'https://shop.example.com/api/v1/orders'" in result.stdout
+        assert "/static/app.css" not in result.stdout
+
+    def test_curl_is_the_target_unless_another_is_asked_for(self, tmp_path: Path) -> None:
+        archive = write_har(tmp_path / "capture.har", har_entry("https://shop.example.com/api/x"))
+        default = runner.invoke(app, ["generate", str(archive)])
+        asked = runner.invoke(app, ["generate", str(archive), "--target", "curl"])
+        assert default.stdout == asked.stdout
+
+    def test_an_unknown_target_is_refused(self, tmp_path: Path) -> None:
+        archive = write_har(tmp_path / "capture.har", har_entry("https://shop.example.com/api/x"))
+        assert runner.invoke(app, ["generate", str(archive), "--target", "rust"]).exit_code != 0
+
+    def test_all_writes_the_filtered_requests_too(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        result = runner.invoke(app, ["generate", str(archive), "--all"])
+        assert result.exit_code == 0
+        assert "/static/app.css" in result.stdout
+
+    def test_credentials_become_variables_rather_than_values(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders?access_token=secret-in-the-url",
+                headers=[{"name": "Authorization", "value": "Bearer secret-in-a-header"}],
+            ),
+        )
+        result = runner.invoke(app, ["generate", str(archive)])
+        assert result.exit_code == 0
+        assert "secret-in-the-url" not in result.output
+        assert "secret-in-a-header" not in result.output
+        assert "<redacted:" not in result.output
+        assert '"$TRACE2API_AUTHORIZATION"' in result.stdout
+        assert '"$TRACE2API_QUERY_ACCESS_TOKEN"' in result.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["generate", str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: HAR file could not be read")
+        assert result.stdout == ""
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["generate"]).exit_code != 0
+
+    def test_the_shipped_example_generates(self) -> None:
+        result = runner.invoke(app, ["generate", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert "curl 'https://shop.example.com/api/v1/orders?status=open&limit=20'" in result.stdout

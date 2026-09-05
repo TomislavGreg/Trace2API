@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
 from trace2api import __version__
+from trace2api.analyze import DEFAULT_KEPT, Relevance
 from trace2api.capture import HarImportError, load_har
+from trace2api.generate import generate_curl
 from trace2api.inspection import inspect_capture, render_inspection
+from trace2api.models import Capture
 
 app = typer.Typer(
     name="trace2api",
@@ -23,6 +27,12 @@ app = typer.Typer(
 
 BAD_CAPTURE_EXIT_CODE = 2
 """Exit code used when a capture cannot be read, kept apart from an ordinary failure."""
+
+
+class Target(StrEnum):
+    """A language a capture can be written out as. More arrive with the tickets for them."""
+
+    CURL = "curl"
 
 
 @app.callback()
@@ -70,11 +80,7 @@ def inspect(
     Credentials are redacted before anything is printed, and query strings are left out,
     so the output can be pasted into a report or an issue.
     """
-    try:
-        recorded = load_har(capture)
-    except HarImportError as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(code=BAD_CAPTURE_EXIT_CODE) from None
+    recorded = _load_capture(capture)
     inspection = inspect_capture(recorded)
     if as_json:
         typer.echo(inspection.as_json())
@@ -82,6 +88,50 @@ def inspect(
     typer.echo(
         render_inspection(inspection, include_noise=include_noise, explain=explain), nl=False
     )
+
+
+@app.command()
+def generate(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a HAR 1.2 archive recorded from a browser session.",
+            show_default=False,
+        ),
+    ],
+    target: Annotated[
+        Target,
+        typer.Option("--target", "-t", help="Language to write the client in."),
+    ] = Target.CURL,
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Write every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+) -> None:
+    """Write the requests a capture holds as a direct client, on standard output.
+
+    Credentials are removed from the capture before anything is written. The client
+    reads each one from an environment variable listed at the top of the output, so the
+    generated code can be committed while the values stay out of it.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    if target is Target.CURL:
+        typer.echo(generate_curl(recorded, keep=keep).code, nl=False)
+
+
+def _load_capture(path: Path) -> Capture:
+    """Read a capture from ``path``, reporting an unreadable archive rather than raising."""
+    try:
+        return load_har(path)
+    except HarImportError as error:
+        typer.echo(f"error: {error}", err=True)
+        raise typer.Exit(code=BAD_CAPTURE_EXIT_CODE) from None
 
 
 def main() -> None:

@@ -25,7 +25,7 @@ import json
 import re
 import secrets
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,19 +45,53 @@ __all__ = [
     "Redaction",
     "RedactionReport",
     "RedactionResult",
+    "SecretSegment",
     "is_redacted",
     "redact_capture",
+    "split_secrets",
 ]
 
 _FINGERPRINT_LENGTH = 8
-_PLACEHOLDER_PATTERN = re.compile(rf"^<redacted:[0-9a-f]{{{_FINGERPRINT_LENGTH}}}>$")
+_PLACEHOLDER_PATTERN = re.compile(rf"<redacted:([0-9a-f]{{{_FINGERPRINT_LENGTH}}})>")
 
 _FORM_MEDIA_TYPE = "application/x-www-form-urlencoded"
 
 
 def is_redacted(value: str) -> bool:
     """Return whether ``value`` is a placeholder left behind by redaction."""
-    return bool(_PLACEHOLDER_PATTERN.match(value.strip()))
+    return bool(_PLACEHOLDER_PATTERN.fullmatch(value.strip()))
+
+
+class SecretSegment(NamedTuple):
+    """One run of a value: either literal text, or where a secret used to be."""
+
+    text: str
+    fingerprint: str | None = None
+
+    @property
+    def is_secret(self) -> bool:
+        """Return whether this run stands in for a value redaction removed."""
+        return self.fingerprint is not None
+
+
+def split_secrets(text: str) -> tuple[SecretSegment, ...]:
+    """Split ``text`` into its literal runs and the placeholders redaction left in it.
+
+    A generator needs both halves separately: literal runs are quoted for the language
+    being written, while each placeholder becomes a reference to wherever the value is
+    supplied at run time. Splitting here keeps the placeholder format in the one module
+    that defines it.
+    """
+    segments: list[SecretSegment] = []
+    position = 0
+    for match in _PLACEHOLDER_PATTERN.finditer(text):
+        if match.start() > position:
+            segments.append(SecretSegment(text[position : match.start()]))
+        segments.append(SecretSegment(match.group(0), match.group(1)))
+        position = match.end()
+    if position < len(text):
+        segments.append(SecretSegment(text[position:]))
+    return tuple(segments)
 
 
 def _holds_a_value(value: Any) -> bool:
