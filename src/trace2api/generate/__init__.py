@@ -17,6 +17,11 @@ from trace2api.generate.curl import (
     generate_curl,
 )
 from trace2api.generate.headers import HeaderRule, OmittedHeader
+from trace2api.generate.python import (
+    PythonCall,
+    PythonClient,
+    generate_python,
+)
 from trace2api.generate.secrets import (
     ENVIRONMENT_PREFIX,
     SecretBinding,
@@ -31,9 +36,12 @@ __all__ = [
     "CurlScript",
     "HeaderRule",
     "OmittedHeader",
+    "PythonCall",
+    "PythonClient",
     "SecretBinding",
     "SecretBindings",
     "bind_secrets",
     "environment_variable",
     "generate_curl",
+    "generate_python",
 ]

@@ -176,6 +176,35 @@ class TestGenerateCommand:
         asked = runner.invoke(app, ["generate", str(archive), "--target", "curl"])
         assert default.stdout == asked.stdout
 
+    def test_writes_a_python_client_when_asked_for_one(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        result = runner.invoke(app, ["generate", str(archive), "--target", "python"])
+        assert result.exit_code == 0
+        assert result.stdout.startswith('"""Direct client for a workflow recorded ')
+        assert "import httpx" in result.stdout
+        assert '"https://shop.example.com/api/v1/orders",' in result.stdout
+        assert "/static/app.css" not in result.stdout
+
+    def test_a_python_client_keeps_credentials_out_of_the_code(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders?access_token=secret-in-the-url",
+                headers=[{"name": "Authorization", "value": "Bearer secret-in-a-header"}],
+            ),
+        )
+        result = runner.invoke(app, ["generate", str(archive), "--target", "python"])
+        assert result.exit_code == 0
+        assert "secret-in-the-url" not in result.output
+        assert "secret-in-a-header" not in result.output
+        assert "<redacted:" not in result.output
+        assert 'TRACE2API_AUTHORIZATION = os.environ["TRACE2API_AUTHORIZATION"]' in result.stdout
+        assert '("access_token", TRACE2API_QUERY_ACCESS_TOKEN),' in result.stdout
+
     def test_an_unknown_target_is_refused(self, tmp_path: Path) -> None:
         archive = write_har(tmp_path / "capture.har", har_entry("https://shop.example.com/api/x"))
         assert runner.invoke(app, ["generate", str(archive), "--target", "rust"]).exit_code != 0

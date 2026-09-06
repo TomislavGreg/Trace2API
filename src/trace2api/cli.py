@@ -11,7 +11,7 @@ import typer
 from trace2api import __version__
 from trace2api.analyze import DEFAULT_KEPT, Relevance
 from trace2api.capture import HarImportError, load_har
-from trace2api.generate import generate_curl
+from trace2api.generate import generate_curl, generate_python
 from trace2api.inspection import inspect_capture, render_inspection
 from trace2api.models import Capture
 
@@ -33,6 +33,7 @@ class Target(StrEnum):
     """A language a capture can be written out as. More arrive with the tickets for them."""
 
     CURL = "curl"
+    PYTHON = "python"
 
 
 @app.callback()
@@ -102,7 +103,11 @@ def generate(
     ],
     target: Annotated[
         Target,
-        typer.Option("--target", "-t", help="Language to write the client in."),
+        typer.Option(
+            "--target",
+            "-t",
+            help="Language to write the client in: a cURL script or a Python httpx module.",
+        ),
     ] = Target.CURL,
     include_noise: Annotated[
         bool,
@@ -123,6 +128,8 @@ def generate(
     keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
     if target is Target.CURL:
         typer.echo(generate_curl(recorded, keep=keep).code, nl=False)
+    else:
+        typer.echo(generate_python(recorded, keep=keep).code, nl=False)
 
 
 def _load_capture(path: Path) -> Capture:
