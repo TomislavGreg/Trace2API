@@ -21,12 +21,12 @@ that hide in a query string have already been replaced by variable references.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from enum import StrEnum
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from trace2api.analyze.relevance import DEFAULT_KEPT, Relevance, classify_capture
+from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header
 from trace2api.sanitize import redact_capture, split_secrets
@@ -34,8 +34,6 @@ from trace2api.sanitize import redact_capture, split_secrets
 __all__ = [
     "CurlCommand",
     "CurlScript",
-    "HeaderOmission",
-    "OmittedHeader",
     "generate_curl",
     "render_curl",
 ]
@@ -46,51 +44,13 @@ _CONTINUATION = " \\"
 
 _READ_METHOD = "GET"
 
-
-class HeaderOmission(StrEnum):
-    """Why an observed header was left out of a generated command."""
-
-    COMPUTED_BY_CURL = "computed-by-curl"
-    HOP_BY_HOP = "hop-by-hop"
-    PSEUDO_HEADER = "pseudo-header"
-    NEGOTIATED_BY_CURL = "negotiated-by-curl"
-
-
-_OMISSION_REASONS: dict[HeaderOmission, str] = {
-    HeaderOmission.COMPUTED_BY_CURL: "curl derives it from the request itself",
-    HeaderOmission.HOP_BY_HOP: "it describes one connection rather than the request",
-    HeaderOmission.PSEUDO_HEADER: "it is an HTTP/2 pseudo header, not a real one",
-    HeaderOmission.NEGOTIATED_BY_CURL: "--compressed asks for it on curl's own terms",
+CURL_OMISSION_REASONS: dict[HeaderRule, str] = {
+    HeaderRule.COMPUTED_BY_CLIENT: "curl derives it from the request itself",
+    HeaderRule.HOP_BY_HOP: "it describes one connection rather than the request",
+    HeaderRule.PSEUDO_HEADER: "it is an HTTP/2 pseudo header, not a real one",
+    HeaderRule.NEGOTIATED_BY_CLIENT: "--compressed asks for it on curl's own terms",
 }
-
-_COMPUTED_HEADERS = frozenset({"content-length", "host"})
-_HOP_BY_HOP_HEADERS = frozenset(
-    {
-        "connection",
-        "keep-alive",
-        "proxy-connection",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-    }
-)
-_ENCODING_HEADER = "accept-encoding"
-_IDENTITY_ENCODING = "identity"
-
-
-class OmittedHeader(BaseModel):
-    """One observed header the command does not send, and the rule that dropped it."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str
-    rule: HeaderOmission
-
-    @property
-    def reason(self) -> str:
-        """Return a one line explanation of the omission."""
-        return _OMISSION_REASONS[self.rule]
+"""How each omission rule reads in a generated cURL script."""
 
 
 class CurlCommand(BaseModel):
@@ -129,9 +89,9 @@ class CurlScript(BaseModel):
         """Return how many captured requests the script leaves out."""
         return self.captured - len(self.commands)
 
-    def omitted_headers(self) -> dict[HeaderOmission, tuple[str, ...]]:
+    def omitted_headers(self) -> dict[HeaderRule, tuple[str, ...]]:
         """Return the header names left out across the script, grouped by rule."""
-        grouped: dict[HeaderOmission, list[str]] = {}
+        grouped: dict[HeaderRule, list[str]] = {}
         for command in self.commands:
             for omitted in command.omitted_headers:
                 names = grouped.setdefault(omitted.rule, [])
@@ -181,7 +141,7 @@ def render_curl(entry: Entry, *, position: int, secrets: SecretBindings) -> Curl
     with an entry it did not sanitize.
     """
     request = entry.request
-    headers, omitted = _partition_headers(request.headers)
+    headers, omitted = partition_headers(request.headers, CURL_OMISSION_REASONS)
     url, query_secrets = _url_with_visible_secrets(request.url)
     body, body_notes = _body_argument(request.body, secrets=secrets)
     notes = [
@@ -195,7 +155,7 @@ def render_curl(entry: Entry, *, position: int, secrets: SecretBindings) -> Curl
     if request.method != _READ_METHOD or body is not None:
         arguments.append(f"--request {request.method}")
     arguments.extend(f"--header {_shell_word(_header_line(header), secrets)}" for header in headers)
-    if any(item.rule is HeaderOmission.NEGOTIATED_BY_CURL for item in omitted):
+    if any(item.rule is HeaderRule.NEGOTIATED_BY_CLIENT for item in omitted):
         arguments.append("--compressed")
     if body is not None:
         arguments.append(body)
@@ -239,33 +199,6 @@ def _url_with_visible_secrets(url: str) -> tuple[str, tuple[str, ...]]:
         return url, ()
     restored = urlunsplit((parts.scheme, parts.netloc, parts.path, "&".join(pairs), parts.fragment))
     return restored, tuple(fingerprints)
-
-
-def _partition_headers(headers: Iterable[Header]) -> tuple[list[Header], list[OmittedHeader]]:
-    """Split observed headers into the ones to send and the ones curl handles itself."""
-    sent: list[Header] = []
-    omitted: list[OmittedHeader] = []
-    for header in headers:
-        rule = _omission_rule(header)
-        if rule is None:
-            sent.append(header)
-        else:
-            omitted.append(OmittedHeader(name=header.name, rule=rule))
-    return sent, omitted
-
-
-def _omission_rule(header: Header) -> HeaderOmission | None:
-    """Return why ``header`` must not be sent as observed, or ``None`` to send it."""
-    name = header.name.strip().lower()
-    if name.startswith(":"):
-        return HeaderOmission.PSEUDO_HEADER
-    if name in _COMPUTED_HEADERS:
-        return HeaderOmission.COMPUTED_BY_CURL
-    if name in _HOP_BY_HOP_HEADERS:
-        return HeaderOmission.HOP_BY_HOP
-    if name == _ENCODING_HEADER and header.value.strip().lower() != _IDENTITY_ENCODING:
-        return HeaderOmission.NEGOTIATED_BY_CURL
-    return None
 
 
 def _header_line(header: Header) -> str:
@@ -341,7 +274,7 @@ def _preamble(script: CurlScript, capture: Capture) -> list[str]:
         lines.append(f"# Recorded from {metadata.start_url}")
     lines.append(f"# Reproducing {len(script)} of {_count(script.captured, 'captured request')}.")
     for rule, names in script.omitted_headers().items():
-        lines.append(f"# Left out ({_OMISSION_REASONS[rule]}): {', '.join(names)}.")
+        lines.append(f"# Left out ({CURL_OMISSION_REASONS[rule]}): {', '.join(names)}.")
     if script.secrets.is_empty:
         lines.append("# The capture held no credentials, so nothing has to be exported.")
         return lines

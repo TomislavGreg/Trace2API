@@ -12,7 +12,7 @@ import pytest
 
 from trace2api.analyze import Relevance
 from trace2api.capture import load_har
-from trace2api.generate import HeaderOmission, generate_curl
+from trace2api.generate import HeaderRule, generate_curl
 from trace2api.models import (
     Body,
     Capture,
@@ -199,16 +199,16 @@ def test_the_query_string_is_kept_because_the_request_needs_it() -> None:
 @pytest.mark.parametrize(
     ("name", "value", "rule"),
     [
-        ("Content-Length", "42", HeaderOmission.COMPUTED_BY_CURL),
-        ("Host", "shop.example.com", HeaderOmission.COMPUTED_BY_CURL),
-        ("Connection", "keep-alive", HeaderOmission.HOP_BY_HOP),
-        ("Transfer-Encoding", "chunked", HeaderOmission.HOP_BY_HOP),
-        (":authority", "shop.example.com", HeaderOmission.PSEUDO_HEADER),
-        ("Accept-Encoding", "gzip, br", HeaderOmission.NEGOTIATED_BY_CURL),
+        ("Content-Length", "42", HeaderRule.COMPUTED_BY_CLIENT),
+        ("Host", "shop.example.com", HeaderRule.COMPUTED_BY_CLIENT),
+        ("Connection", "keep-alive", HeaderRule.HOP_BY_HOP),
+        ("Transfer-Encoding", "chunked", HeaderRule.HOP_BY_HOP),
+        (":authority", "shop.example.com", HeaderRule.PSEUDO_HEADER),
+        ("Accept-Encoding", "gzip, br", HeaderRule.NEGOTIATED_BY_CLIENT),
     ],
 )
 def test_headers_curl_derives_are_left_out_with_a_stated_reason(
-    name: str, value: str, rule: HeaderOmission
+    name: str, value: str, rule: HeaderRule
 ) -> None:
     script = generate_curl(
         capture(entry("a", "https://shop.example.com/api/orders", headers=[(name, value)]))

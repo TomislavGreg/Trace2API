@@ -14,10 +14,9 @@ from __future__ import annotations
 from trace2api.generate.curl import (
     CurlCommand,
     CurlScript,
-    HeaderOmission,
-    OmittedHeader,
     generate_curl,
 )
+from trace2api.generate.headers import HeaderRule, OmittedHeader
 from trace2api.generate.secrets import (
     ENVIRONMENT_PREFIX,
     SecretBinding,
@@ -30,7 +29,7 @@ __all__ = [
     "ENVIRONMENT_PREFIX",
     "CurlCommand",
     "CurlScript",
-    "HeaderOmission",
+    "HeaderRule",
     "OmittedHeader",
     "SecretBinding",
     "SecretBindings",
