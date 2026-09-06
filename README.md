@@ -21,7 +21,8 @@ trace2api record
     -> verify the result
 ```
 
-Planned output targets are cURL, Python using `httpx`, and JavaScript using `fetch`.
+The output targets are cURL and Python using `httpx`, with JavaScript using `fetch`
+planned.
 
 Trace2API is intended for authorized development, testing, debugging, integration work,
 and permitted data access against systems the operator is allowed to use.
@@ -29,9 +30,10 @@ and permitted data access against systems the operator is allowed to use.
 ## Status
 
 Early development. A HAR archive can be imported, redacted, inspected, and written out
-as a runnable cURL client from the command line. The Python and JavaScript targets, and
-the inference, replay, and verification stages described above, are not implemented yet.
-The Roadmap and Ticket Board below track what is real and what is planned.
+as a runnable cURL script or Python `httpx` client from the command line. The JavaScript
+target, and the inference, replay, and verification stages described above, are not
+implemented yet. The Roadmap and Ticket Board below track what is real and what is
+planned.
 
 ## Installation
 
@@ -160,6 +162,70 @@ $ export TRACE2API_AUTHORIZATION=... TRACE2API_COOKIE_SESSION=...
 $ sh orders.sh
 ```
 
+The same capture as a Python client, which is where the workflow usually ends up once it
+has to be run from somewhere other than a terminal:
+
+```console
+$ trace2api generate examples/storefront-orders.har --target python > orders.py
+$ head -45 orders.py
+"""Direct client for a workflow recorded 2026-09-04T09:15:00+00:00 (source: har).
+
+Reproducing 4 of 8 captured requests.
+
+Credentials were removed from the capture. Export them before running:
+  TRACE2API_AUTHORIZATION   request.headers.authorization
+  TRACE2API_COOKIE_SESSION  request.headers.cookie[session]
+  TRACE2API_COOKIE_LOCALE   request.headers.cookie[locale]
+  TRACE2API_X_CSRF_TOKEN    request.headers.x-csrf-token
+"""
+
+import os
+
+import httpx
+
+# Every credential is read up front, so a missing one stops the client
+# before it sends anything rather than halfway through the workflow.
+TRACE2API_AUTHORIZATION = os.environ["TRACE2API_AUTHORIZATION"]
+TRACE2API_COOKIE_SESSION = os.environ["TRACE2API_COOKIE_SESSION"]
+TRACE2API_COOKIE_LOCALE = os.environ["TRACE2API_COOKIE_LOCALE"]
+TRACE2API_X_CSRF_TOKEN = os.environ["TRACE2API_X_CSRF_TOKEN"]
+
+
+def run(client: httpx.Client) -> list[httpx.Response]:
+    """Send the recorded requests in the order they were observed."""
+    # 1  GET https://shop.example.com/orders
+    response_1 = client.request(
+        "GET",
+        "https://shop.example.com/orders",
+        headers={
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+        },
+    )
+
+    # 4  GET https://shop.example.com/api/v1/orders
+    response_4 = client.request(
+        "GET",
+        "https://shop.example.com/api/v1/orders?status=open&limit=20",
+        headers={
+            "Accept": "application/json",
+            "Authorization": "Bearer " + TRACE2API_AUTHORIZATION,
+            "Cookie": "session=" + TRACE2API_COOKIE_SESSION + "; locale=" + TRACE2API_COOKIE_LOCALE,
+        },
+    )
+```
+
+The two requests the excerpt cuts off follow the same shape, and the module ends with a
+`return` listing every response and a `main` that opens a client and prints a line per
+response. Nothing imports Trace2API: it is ordinary Python that can be edited, committed,
+and run wherever `httpx` is installed.
+
+`run` takes the client rather than making one, so a caller can configure timeouts,
+proxies, or a base client of its own, and it hands the responses back rather than
+printing them. The requests go out in the order they were observed, one at a time, and
+redirects are not followed, because a redirect the browser followed was recorded as its
+own request.
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -176,6 +242,13 @@ $ sh orders.sh
   each omission stated, and a request the script cannot reproduce faithfully, such as one
   with a binary body, says so rather than sending something else. `--all` writes the
   filtered requests too.
+- `trace2api generate CAPTURE --target python` writes the same requests as a Python
+  module using `httpx`: a `run` function that sends them in the observed order and
+  returns the responses, and a `main` that opens a client and reports what came back.
+  Every credential is read from an environment variable at import time, so a missing one
+  stops the client before it sends anything. Bodies are sent as the text that was
+  observed rather than re-serialized, and a query string that held a credential is sent
+  as parameters so the supplied value is encoded.
 - A synthetic capture at `examples/storefront-orders.har` that the quick start above
   runs against.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
@@ -294,7 +367,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-005 | Deterministic filtering for obvious assets, analytics, telemetry, and likely application requests. | Done | T2A-004 |
 | T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Done | T2A-005 |
 | T2A-007 | Sanitized runnable cURL generator. | Done | T2A-004, T2A-003 |
-| T2A-008 | Sanitized runnable Python `httpx` generator. | Ready | T2A-007 |
+| T2A-008 | Sanitized runnable Python `httpx` generator. | Done | T2A-007 |
 | T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Ready | T2A-007 |
 
 ### Phase 2: Live capture
@@ -374,6 +447,8 @@ src/trace2api/
         har.py
     generate/
         curl.py
+        headers.py
+        python.py
         secrets.py
     sanitize/
         policy.py
@@ -403,7 +478,9 @@ behind each verdict so the reasoning can be read rather than trusted.
 the same requests in a different language, and they share two rules: the capture is
 redacted before a line is written, and every secret becomes a reference to an environment
 variable. `secrets.py` decides what those variables are called and reports where each
-value came from. `curl.py` is the first target.
+value came from. `headers.py` holds the rules that decide which observed headers a
+client must not send as they stand, because they follow from HTTP rather than from the
+language being written. `curl.py` and `python.py` are the targets that exist so far.
 
 `inspection.py` turns a capture into what a command prints: it redacts first, then
 classifies, then renders. Keeping that order in one place means no command can display a
@@ -417,6 +494,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
