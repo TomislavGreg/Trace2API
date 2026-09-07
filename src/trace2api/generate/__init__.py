@@ -17,6 +17,11 @@ from trace2api.generate.curl import (
     generate_curl,
 )
 from trace2api.generate.headers import HeaderRule, OmittedHeader
+from trace2api.generate.javascript import (
+    JavaScriptCall,
+    JavaScriptClient,
+    generate_javascript,
+)
 from trace2api.generate.python import (
     PythonCall,
     PythonClient,
@@ -35,6 +40,8 @@ __all__ = [
     "CurlCommand",
     "CurlScript",
     "HeaderRule",
+    "JavaScriptCall",
+    "JavaScriptClient",
     "OmittedHeader",
     "PythonCall",
     "PythonClient",
@@ -43,5 +50,6 @@ __all__ = [
     "bind_secrets",
     "environment_variable",
     "generate_curl",
+    "generate_javascript",
     "generate_python",
 ]
