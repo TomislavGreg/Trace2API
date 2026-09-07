@@ -11,7 +11,7 @@ import typer
 from trace2api import __version__
 from trace2api.analyze import DEFAULT_KEPT, Relevance
 from trace2api.capture import HarImportError, load_har
-from trace2api.generate import generate_curl, generate_python
+from trace2api.generate import generate_curl, generate_javascript, generate_python
 from trace2api.inspection import inspect_capture, render_inspection
 from trace2api.models import Capture
 
@@ -34,6 +34,7 @@ class Target(StrEnum):
 
     CURL = "curl"
     PYTHON = "python"
+    JAVASCRIPT = "javascript"
 
 
 @app.callback()
@@ -106,7 +107,10 @@ def generate(
         typer.Option(
             "--target",
             "-t",
-            help="Language to write the client in: a cURL script or a Python httpx module.",
+            help=(
+                "Language to write the client in: a cURL script, a Python httpx module, "
+                "or a JavaScript fetch module."
+            ),
         ),
     ] = Target.CURL,
     include_noise: Annotated[
@@ -127,9 +131,12 @@ def generate(
     recorded = _load_capture(capture)
     keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
     if target is Target.CURL:
-        typer.echo(generate_curl(recorded, keep=keep).code, nl=False)
+        code = generate_curl(recorded, keep=keep).code
+    elif target is Target.PYTHON:
+        code = generate_python(recorded, keep=keep).code
     else:
-        typer.echo(generate_python(recorded, keep=keep).code, nl=False)
+        code = generate_javascript(recorded, keep=keep).code
+    typer.echo(code, nl=False)
 
 
 def _load_capture(path: Path) -> Capture:
