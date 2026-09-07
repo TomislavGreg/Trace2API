@@ -21,8 +21,7 @@ trace2api record
     -> verify the result
 ```
 
-The output targets are cURL and Python using `httpx`, with JavaScript using `fetch`
-planned.
+The output targets are cURL, Python using `httpx`, and JavaScript using `fetch`.
 
 Trace2API is intended for authorized development, testing, debugging, integration work,
 and permitted data access against systems the operator is allowed to use.
@@ -30,8 +29,8 @@ and permitted data access against systems the operator is allowed to use.
 ## Status
 
 Early development. A HAR archive can be imported, redacted, inspected, and written out
-as a runnable cURL script or Python `httpx` client from the command line. The JavaScript
-target, and the inference, replay, and verification stages described above, are not
+as a runnable cURL script, Python `httpx` module, or JavaScript `fetch` module from the
+command line. The inference, replay, and verification stages described above are not
 implemented yet. The Roadmap and Ticket Board below track what is real and what is
 planned.
 
@@ -226,6 +225,58 @@ printing them. The requests go out in the order they were observed, one at a tim
 redirects are not followed, because a redirect the browser followed was recorded as its
 own request.
 
+The same capture as a JavaScript module, for the workflows that end up in a Node script
+or a serverless function:
+
+```console
+$ trace2api generate examples/storefront-orders.har --target javascript > orders.mjs
+$ head -40 orders.mjs
+// Direct client for a workflow recorded 2026-09-04T09:15:00+00:00 (source: har).
+// Reproducing 4 of 8 captured requests.
+//
+// An ES module for a runtime with a global fetch, such as Node 18 or newer.
+// Save it as a .mjs file, or as .js in a package declaring "type": "module".
+//
+// Credentials were removed from the capture. Export them before running:
+//   TRACE2API_AUTHORIZATION   request.headers.authorization
+//   TRACE2API_COOKIE_SESSION  request.headers.cookie[session]
+//   TRACE2API_COOKIE_LOCALE   request.headers.cookie[locale]
+//   TRACE2API_X_CSRF_TOKEN    request.headers.x-csrf-token
+
+import { pathToFileURL } from "node:url";
+
+function requireEnv(name) {
+  const value = process.env[name];
+  if (value === undefined) {
+    throw new Error(name + " is not set: it supplies a credential this workflow needs.");
+  }
+  return value;
+}
+
+// Every credential is read up front, so a missing one stops the client
+// before it sends anything rather than halfway through the workflow.
+const TRACE2API_AUTHORIZATION = requireEnv("TRACE2API_AUTHORIZATION");
+const TRACE2API_COOKIE_SESSION = requireEnv("TRACE2API_COOKIE_SESSION");
+const TRACE2API_COOKIE_LOCALE = requireEnv("TRACE2API_COOKIE_LOCALE");
+const TRACE2API_X_CSRF_TOKEN = requireEnv("TRACE2API_X_CSRF_TOKEN");
+
+// Sends the recorded requests in the order they were observed.
+export async function run() {
+  // 1  GET https://shop.example.com/orders
+  const response1 = await fetch("https://shop.example.com/orders", {
+    method: "GET",
+    headers: {
+      "Accept": "text/html,application/xhtml+xml",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64)",
+    },
+    redirect: "manual",
+  });
+```
+
+Nothing is installed to run it: `fetch`, `URL`, and `URLSearchParams` are part of the
+runtime. The module exports `run`, so the workflow can be imported and awaited from
+somewhere else, and running the file directly prints a line per response.
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -249,6 +300,13 @@ own request.
   stops the client before it sends anything. Bodies are sent as the text that was
   observed rather than re-serialized, and a query string that held a credential is sent
   as parameters so the supplied value is encoded.
+- `trace2api generate CAPTURE --target javascript` writes the same requests as an ES
+  module using `fetch`: a `run` function that awaits them in the observed order and
+  returns the responses, and a `main` that reports what came back. Every credential is
+  read from the environment as the module loads, so a missing one stops the client
+  before it sends anything. A query string that held a credential is rebuilt through
+  `URLSearchParams`, and a body `fetch` refuses to send, such as one observed on a `GET`
+  request, is reported rather than dropped silently.
 - A synthetic capture at `examples/storefront-orders.har` that the quick start above
   runs against.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
@@ -368,7 +426,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-006 | `inspect` command showing method, host, path, status, type, and relevance. | Done | T2A-005 |
 | T2A-007 | Sanitized runnable cURL generator. | Done | T2A-004, T2A-003 |
 | T2A-008 | Sanitized runnable Python `httpx` generator. | Done | T2A-007 |
-| T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Ready | T2A-007 |
+| T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Done | T2A-007 |
 
 ### Phase 2: Live capture
 
@@ -432,6 +490,11 @@ $ ruff check .
 $ pytest
 ```
 
+The tests for the JavaScript target run the generated module under Node against a stub
+`fetch` and check what it actually sent. They are skipped where `node` is not installed,
+so the suite passes either way, but a change to that target is only properly covered
+with Node present.
+
 Layout:
 
 ```text
@@ -448,6 +511,7 @@ src/trace2api/
     generate/
         curl.py
         headers.py
+        javascript.py
         python.py
         secrets.py
     sanitize/
@@ -480,7 +544,9 @@ redacted before a line is written, and every secret becomes a reference to an en
 variable. `secrets.py` decides what those variables are called and reports where each
 value came from. `headers.py` holds the rules that decide which observed headers a
 client must not send as they stand, because they follow from HTTP rather than from the
-language being written. `curl.py` and `python.py` are the targets that exist so far.
+language being written. `curl.py`, `python.py`, and `javascript.py` are the targets, and
+each states in its own terms what it cannot reproduce rather than sending something
+else.
 
 `inspection.py` turns a capture into what a command prints: it redacts first, then
 classifies, then renders. Keeping that order in one place means no command can display a
@@ -494,6 +560,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
