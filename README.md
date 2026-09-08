@@ -30,9 +30,10 @@ and permitted data access against systems the operator is allowed to use.
 
 Early development. A HAR archive can be imported, redacted, inspected, and written out
 as a runnable cURL script, Python `httpx` module, or JavaScript `fetch` module from the
-command line. The inference, replay, and verification stages described above are not
-implemented yet. The Roadmap and Ticket Board below track what is real and what is
-planned.
+command line. A live browser session can be recorded into the same capture models
+through the library, though the `record` command that saves one is not there yet. The
+inference, replay, and verification stages described above are not implemented yet. The
+Roadmap and Ticket Board below track what is real and what is planned.
 
 ## Installation
 
@@ -47,6 +48,13 @@ $ python -m pip install -e .
 ```
 
 Python 3.12 or newer is required.
+
+Recording a live browser session needs a browser, which the rest of the tool does not:
+
+```console
+$ python -m pip install -e ".[browser]"
+$ playwright install chromium
+```
 
 ## Quick start
 
@@ -309,6 +317,13 @@ somewhere else, and running the file directly prints a line per response.
   request, is reported rather than dropped silently.
 - A synthetic capture at `examples/storefront-orders.har` that the quick start above
   runs against.
+- A browser recorder that watches a live session through Playwright and records every
+  http and https exchange it performs, with the response payloads of the requests the
+  analysis reads, the durations the browser measured, and the requests that failed or
+  were still in flight when recording stopped. It is available to code as
+  `trace2api.capture.record_session` and `trace2api.capture.recording`; the command that
+  saves a recording is T2A-011. Recording runs in a throwaway browser profile, so a
+  session leaves no cookie jar, history, or cache on disk.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
   timings, entries, and capture metadata, with case insensitive header lookup, URL
   derived query parameters, validation of what cannot be replayed later, and JSON round
@@ -359,6 +374,8 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   generated client is the deliberate exception: it carries the whole URL because it has
   to reproduce the request, and the credentials in it are already variable references.
 - Generated clients read secrets from environment variables rather than embedding them.
+- A recorded session runs in a throwaway browser profile. The workflow starts signed out,
+  and no cookie jar, history, or cache is left behind on disk.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
   captures, cookies, tokens, browser profiles, and `.env` files are excluded by
@@ -432,8 +449,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-010 | Browser Fetch/XHR recorder using Playwright or CDP. | Ready | T2A-002 |
-| T2A-011 | `trace2api record` produces a sanitized inspectable local capture. | Backlog | T2A-010, T2A-003 |
+| T2A-010 | Browser Fetch/XHR recorder using Playwright or CDP. | Done | T2A-002 |
+| T2A-011 | `trace2api record` produces a sanitized inspectable local capture. | Ready | T2A-010, T2A-003 |
 | T2A-012 | Capture summary with total requests, filtered noise, likely application requests, and content types. | Backlog | T2A-011, T2A-005 |
 
 ### Phase 3: Differential inference
@@ -495,6 +512,12 @@ The tests for the JavaScript target run the generated module under Node against 
 so the suite passes either way, but a change to that target is only properly covered
 with Node present.
 
+The browser recorder is covered the same way. Most of its tests drive it with stand-in
+request objects, and two record a real Chromium session against a local HTTP server.
+Those two are skipped where Playwright or a browser build is missing. Where a machine
+has a Chromium binary that Playwright did not download itself, `TRACE2API_TEST_CHROMIUM`
+points them at it.
+
 Layout:
 
 ```text
@@ -507,6 +530,7 @@ src/trace2api/
     analyze/
         relevance.py
     capture/
+        browser.py
         har.py
     generate/
         curl.py
@@ -527,8 +551,16 @@ produces a new object rather than editing the record of what was observed.
 
 `capture/` turns a recording of a workflow into those models. `har.py` reads HAR 1.2
 archives, keeping what the archive recorded and leaving judgement about relevance to the
-analysis stages. Import does not redact, so a capture that comes out of it still holds
-whatever was observed.
+analysis stages. `browser.py` watches a live session instead, listening to the request
+events a Playwright browser context emits. It keeps every http and https exchange and
+leaves the same judgement to the analysis stages, because a recording that dropped
+requests could not report what it left out. Neither one redacts, so a capture that comes
+out of them still holds whatever was observed.
+
+Playwright cannot be asked about a request from inside one of its own event handlers, so
+the recorder separates noting an event from reading what it refers to: handlers record
+that something happened, and draining performs the reads from the thread driving the
+session, while the browser still holds the payloads.
 
 `sanitize/` removes credentials from a capture. `policy.py` decides what counts as one,
 `redact.py` rewrites the capture and records what it took out. Every stage that persists
@@ -560,6 +592,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
