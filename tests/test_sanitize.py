@@ -405,10 +405,26 @@ class TestFingerprints:
             request_headers=[("Authorization", "Bearer sk-test-abc"), ("Cookie", "session=abc")],
             request_body=json_body({"password": "hunter2", "status": "open"}),
         )
-        once = redact_capture(capture, salt=SALT).capture
-        twice_result = redact_capture(once, salt=SALT)
-        assert twice_result.capture == once
-        assert twice_result.report.is_empty
+        once = redact_capture(capture, salt=SALT)
+        twice = redact_capture(once.capture, salt=SALT)
+        assert twice.capture == once.capture
+
+    def test_an_already_redacted_capture_still_reports_where_its_secrets_are(self) -> None:
+        """A capture read back from disk arrives sanitized, and later stages need the report."""
+        capture = make_capture(
+            url="https://api.example.test/v1/orders?api_key=key-abc123",
+            request_headers=[("Authorization", "Bearer sk-test-abc"), ("Cookie", "session=abc")],
+        )
+        once = redact_capture(capture, salt=SALT)
+        twice = redact_capture(once.capture, salt=SALT)
+        assert twice.report == once.report
+
+    def test_redacting_twice_does_not_fingerprint_the_placeholder(self) -> None:
+        """A second pass must report the value's own fingerprint, not one of the placeholder."""
+        capture = make_capture(request_headers=[("X-Api-Key", "key-abc123")])
+        once = redact_capture(capture, salt=SALT)
+        twice = redact_capture(once.capture, salt=SALT)
+        assert twice.report.redactions[0].fingerprint == once.report.redactions[0].fingerprint
 
 
 class TestCaptureIsPreserved:

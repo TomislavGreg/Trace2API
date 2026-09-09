@@ -9,6 +9,12 @@ requests still looks like one value to later stages while the value itself is go
 salt lives only in memory for the duration of a run and is never written into a capture,
 which keeps the fingerprints from being reversible by anyone reading the output.
 
+Redacting an already sanitized capture is how a capture read back from disk enters a
+later stage, so it is not treated as a special case: the placeholders stay as they are,
+and the report still accounts for each one. The report, not the capture, is what says
+where a secret belonged, and a stage such as code generation needs that to name the
+variable a value comes back under.
+
 What redaction does not do: bodies it cannot parse (binary payloads, unknown text
 formats) are left untouched, because blanking them would destroy the evidence the
 inference stages read. Sensitive material in such a body is caught only if it also
@@ -59,7 +65,13 @@ _FORM_MEDIA_TYPE = "application/x-www-form-urlencoded"
 
 def is_redacted(value: str) -> bool:
     """Return whether ``value`` is a placeholder left behind by redaction."""
-    return bool(_PLACEHOLDER_PATTERN.fullmatch(value.strip()))
+    return _placeholder_fingerprint(value) is not None
+
+
+def _placeholder_fingerprint(value: str) -> str | None:
+    """Return the fingerprint ``value`` carries, when it is a placeholder and nothing else."""
+    match = _PLACEHOLDER_PATTERN.fullmatch(value.strip())
+    return match.group(1) if match else None
 
 
 class SecretSegment(NamedTuple):
@@ -107,7 +119,11 @@ def _holds_a_value(value: Any) -> bool:
 
 
 class Redaction(BaseModel):
-    """One value that was removed, described without quoting it."""
+    """One secret a capture held, described without quoting it.
+
+    A value an earlier run already replaced is reported here too, since the report is
+    what tells a later stage where a placeholder belongs.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -118,7 +134,7 @@ class Redaction(BaseModel):
 
 
 class RedactionReport(BaseModel):
-    """Everything redaction removed from a capture."""
+    """Every secret redaction accounted for in a capture, by location and rule."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -181,13 +197,14 @@ class _Redactor:
     def _replace(self, value: str, location: str, rule: RedactionRule) -> str:
         """Record a redaction and return the placeholder that takes the value's place.
 
-        A value that is already a placeholder is returned untouched, so redacting a
-        capture twice produces the same capture and the same report.
+        A value an earlier run already replaced keeps the placeholder it has, so
+        redacting a capture twice produces the same capture. It is still reported, so
+        that redacting twice also produces the same report: a capture read back from
+        disk is already sanitized, and a stage that needs to know where its secrets
+        belong has only the report to tell it.
         """
-        if is_redacted(value):
-            return value
-        digest = hmac.new(self._salt, value.encode("utf-8"), hashlib.sha256).hexdigest()
-        fingerprint = digest[:_FINGERPRINT_LENGTH]
+        existing = _placeholder_fingerprint(value)
+        fingerprint = existing if existing is not None else self._fingerprint(value)
         self.redactions.append(
             Redaction(
                 entry_id=self._entry_id,
@@ -196,7 +213,12 @@ class _Redactor:
                 fingerprint=fingerprint,
             )
         )
-        return f"<redacted:{fingerprint}>"
+        return value if existing is not None else f"<redacted:{fingerprint}>"
+
+    def _fingerprint(self, value: str) -> str:
+        """Return the salted fingerprint standing in for ``value``."""
+        digest = hmac.new(self._salt, value.encode("utf-8"), hashlib.sha256).hexdigest()
+        return digest[:_FINGERPRINT_LENGTH]
 
     # Entries
 
