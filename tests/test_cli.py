@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import pytest
 from typer.testing import CliRunner
 
-from trace2api import __version__
+from trace2api import __version__, cli
+from trace2api.capture import BrowserCaptureError, save_capture
 from trace2api.cli import app
+from trace2api.models import (
+    Capture,
+    CaptureMetadata,
+    CaptureSource,
+    Entry,
+    Headers,
+    Request,
+    ResourceType,
+    Response,
+)
 
 runner = CliRunner()
 
@@ -38,6 +50,7 @@ def test_help_describes_the_product() -> None:
 def test_help_lists_the_commands() -> None:
     output = _unwrapped(runner.invoke(app, ["--help"]).output)
     assert "version" in output
+    assert "record" in output
     assert "inspect" in output
     assert "generate" in output
 
@@ -137,7 +150,7 @@ class TestInspectCommand:
     def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["inspect", str(tmp_path / "absent.har")])
         assert result.exit_code == 2
-        assert result.stderr.startswith("error: HAR file could not be read")
+        assert result.stderr.startswith("error: capture could not be read")
         assert result.stdout == ""
 
     def test_a_malformed_capture_names_the_field_that_failed(self, tmp_path: Path) -> None:
@@ -267,7 +280,7 @@ class TestGenerateCommand:
     def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
         result = runner.invoke(app, ["generate", str(tmp_path / "absent.har")])
         assert result.exit_code == 2
-        assert result.stderr.startswith("error: HAR file could not be read")
+        assert result.stderr.startswith("error: capture could not be read")
         assert result.stdout == ""
 
     def test_a_capture_is_required(self) -> None:
@@ -277,3 +290,305 @@ class TestGenerateCommand:
         result = runner.invoke(app, ["generate", str(EXAMPLE_HAR)])
         assert result.exit_code == 0
         assert "curl 'https://shop.example.com/api/v1/orders?status=open&limit=20'" in result.stdout
+
+
+def saved_capture(path: Path, *entries: Entry, **metadata: Any) -> Path:
+    """Write a saved capture holding ``entries`` and return its path."""
+    fields: dict[str, Any] = {
+        "source": CaptureSource.BROWSER,
+        "created_at": datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+        **metadata,
+    }
+    capture = Capture(metadata=CaptureMetadata(**fields), entries=list(entries))
+    return save_capture(capture, path).path
+
+
+def recorded_entry(
+    entry_id: str,
+    url: str,
+    *,
+    resource_type: ResourceType = ResourceType.XHR,
+    headers: list[tuple[str, str]] | None = None,
+) -> Entry:
+    """Build one exchange as the browser recorder would have recorded it."""
+    return Entry(
+        id=entry_id,
+        started_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+        request=Request(method="GET", url=url, headers=Headers.from_pairs(headers or [])),
+        response=Response(status=200),
+        resource_type=resource_type,
+    )
+
+
+class TestRecordCommand:
+    def test_writes_a_capture_the_other_commands_can_read(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "session.json"
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                    start_url=url,
+                ),
+                entries=[recorded_entry("b0001", "https://shop.example.com/api/v1/orders")],
+            ),
+        )
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(destination)]
+        )
+
+        assert result.exit_code == 0
+        assert destination.exists()
+        inspected = runner.invoke(app, ["inspect", str(destination)])
+        assert inspected.exit_code == 0
+        assert "/api/v1/orders" in inspected.stdout
+
+    def test_reports_what_was_recorded_and_where_it_went(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "session.json"
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                ),
+                entries=[
+                    recorded_entry("b0001", "https://shop.example.com/api/v1/orders"),
+                    recorded_entry("b0002", "https://shop.example.com/api/v1/orders/4711"),
+                ],
+            ),
+        )
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(destination)]
+        )
+
+        assert result.exit_code == 0
+        assert f"Recorded 2 requests to {destination}." in result.stdout
+        assert "No credentials were found to redact." in result.stdout
+        assert f"trace2api inspect {destination}" in result.stdout
+
+    def test_credentials_never_reach_the_saved_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "session.json"
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                ),
+                entries=[
+                    recorded_entry(
+                        "b0001",
+                        "https://shop.example.com/api/v1/orders",
+                        headers=[("Authorization", "Bearer secret-in-a-header")],
+                    )
+                ],
+            ),
+        )
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(destination)]
+        )
+
+        assert result.exit_code == 0
+        assert "secret-in-a-header" not in destination.read_text(encoding="utf-8")
+        assert "secret-in-a-header" not in result.output
+        assert "Redacted 1 value before writing it." in result.stdout
+
+    def test_passes_the_session_options_through(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake_record(url: str, **kwargs: Any) -> Capture:
+            seen["url"] = url
+            seen.update(kwargs)
+            return Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                )
+            )
+
+        monkeypatch.setattr(cli, "record_session", fake_record)
+
+        result = runner.invoke(
+            app,
+            [
+                "record",
+                "https://shop.example.com/orders",
+                "-o",
+                str(tmp_path / "session.json"),
+                "--headless",
+                "--timeout",
+                "30",
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert seen == {
+            "url": "https://shop.example.com/orders",
+            "headless": True,
+            "timeout_s": 30.0,
+        }
+
+    def test_recording_ends_with_the_browser_unless_a_timeout_is_given(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake_record(url: str, **kwargs: Any) -> Capture:
+            seen.update(kwargs)
+            return Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                )
+            )
+
+        monkeypatch.setattr(cli, "record_session", fake_record)
+
+        runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(tmp_path / "s.json")]
+        )
+
+        assert seen == {"headless": False, "timeout_s": None}
+
+    def test_a_timeout_that_records_nothing_is_refused(self, tmp_path: Path) -> None:
+        result = runner.invoke(
+            app,
+            [
+                "record",
+                "https://shop.example.com/orders",
+                "-o",
+                str(tmp_path / "s.json"),
+                "--timeout",
+                "0",
+            ],
+        )
+
+        assert result.exit_code != 0
+        assert not (tmp_path / "s.json").exists()
+
+    def test_a_recording_that_could_not_start_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def refuse(url: str, **kwargs: Any) -> Capture:
+            raise BrowserCaptureError("live recording needs Playwright, which is not installed.")
+
+        monkeypatch.setattr(cli, "record_session", refuse)
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(tmp_path / "s.json")]
+        )
+
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: live recording needs Playwright")
+        assert not (tmp_path / "s.json").exists()
+
+    def test_a_capture_that_cannot_be_written_is_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                )
+            ),
+        )
+
+        result = runner.invoke(
+            app,
+            [
+                "record",
+                "https://shop.example.com/orders",
+                "-o",
+                str(tmp_path / "absent" / "s.json"),
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "could not be written" in result.stderr
+
+    def test_a_url_is_required(self) -> None:
+        assert runner.invoke(app, ["record"]).exit_code != 0
+
+
+class TestSavedCaptureInput:
+    def test_inspect_reads_a_saved_capture(self, tmp_path: Path) -> None:
+        capture_file = saved_capture(
+            tmp_path / "session.json",
+            recorded_entry("b0001", "https://shop.example.com/api/v1/orders"),
+            recorded_entry(
+                "b0002",
+                "https://cdn.example.com/static/app.css",
+                resource_type=ResourceType.STYLESHEET,
+            ),
+            start_url="https://shop.example.com/orders",
+        )
+
+        result = runner.invoke(app, ["inspect", str(capture_file)])
+
+        assert result.exit_code == 0
+        assert "from browser" in result.stdout
+        assert "Started at: https://shop.example.com/orders" in result.stdout
+        assert "/api/v1/orders" in result.stdout
+        assert "Showing 1 of 2 requests" in result.stdout
+
+    def test_generate_reads_a_saved_capture(self, tmp_path: Path) -> None:
+        capture_file = saved_capture(
+            tmp_path / "session.json",
+            recorded_entry("b0001", "https://shop.example.com/api/v1/orders"),
+        )
+
+        result = runner.invoke(app, ["generate", str(capture_file)])
+
+        assert result.exit_code == 0
+        assert "curl 'https://shop.example.com/api/v1/orders'" in result.stdout
+
+    def test_a_client_from_a_saved_capture_names_its_credentials(self, tmp_path: Path) -> None:
+        """A saved capture arrives redacted, and the variables must still be named for it."""
+        capture_file = saved_capture(
+            tmp_path / "session.json",
+            recorded_entry(
+                "b0001",
+                "https://shop.example.com/api/v1/orders",
+                headers=[
+                    ("Authorization", "Bearer secret-in-a-header"),
+                    ("Cookie", "session=secret-in-a-cookie"),
+                ],
+            ),
+        )
+
+        result = runner.invoke(app, ["generate", str(capture_file)])
+
+        assert result.exit_code == 0
+        assert "secret-in-a-header" not in result.output
+        assert "TRACE2API_AUTHORIZATION   request.headers.authorization" in result.stdout
+        assert '"$TRACE2API_AUTHORIZATION"' in result.stdout
+        assert '"$TRACE2API_COOKIE_SESSION"' in result.stdout
+        assert "TRACE2API_SECRET_" not in result.stdout
+
+    def test_a_file_of_neither_format_is_reported(self, tmp_path: Path) -> None:
+        other = tmp_path / "notes.json"
+        other.write_text('{"requests": []}', encoding="utf-8")
+
+        result = runner.invoke(app, ["inspect", str(other)])
+
+        assert result.exit_code == 2
+        assert "neither a Trace2API capture nor a HAR archive" in result.stderr
