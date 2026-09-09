@@ -17,6 +17,8 @@ htmlcov/
 # Captures and other material that must never be committed
 *.har
 captures/
+# The file `trace2api record` writes when no destination is named.
+capture.json
 # Exception: the synthetic archives under examples/ are written for this repository and
 # contain no real host, credential, or personal data.
 !examples/*.har

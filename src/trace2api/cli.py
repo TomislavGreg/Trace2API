@@ -4,13 +4,21 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
 from trace2api import __version__
 from trace2api.analyze import DEFAULT_KEPT, Relevance
-from trace2api.capture import HarImportError, load_har
+from trace2api.capture import (
+    BrowserCaptureError,
+    CaptureFileError,
+    HarImportError,
+    SavedCapture,
+    read_capture,
+    record_session,
+    save_capture,
+)
 from trace2api.generate import generate_curl, generate_javascript, generate_python
 from trace2api.inspection import inspect_capture, render_inspection
 from trace2api.models import Capture
@@ -26,7 +34,11 @@ app = typer.Typer(
 )
 
 BAD_CAPTURE_EXIT_CODE = 2
-"""Exit code used when a capture cannot be read, kept apart from an ordinary failure."""
+"""Exit code used when a capture cannot be recorded, read, or written, kept apart from an
+ordinary failure."""
+
+DEFAULT_CAPTURE_FILE = Path("capture.json")
+"""Where a recording is written when no destination is named."""
 
 
 class Target(StrEnum):
@@ -49,12 +61,91 @@ def version() -> None:
 
 
 @app.command()
+def record(
+    url: Annotated[
+        str,
+        typer.Argument(
+            metavar="URL",
+            help="Address the browser opens. The workflow is performed from there.",
+            show_default=False,
+        ),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            "-o",
+            metavar="FILE",
+            help="Where to write the capture. An existing file is replaced.",
+        ),
+    ] = DEFAULT_CAPTURE_FILE,
+    headless: Annotated[
+        bool,
+        typer.Option(
+            "--headless",
+            help=(
+                "Run the browser without a window. Useful for a workflow that needs no "
+                "interaction, since nothing can be clicked."
+            ),
+        ),
+    ] = False,
+    timeout: Annotated[
+        float | None,
+        typer.Option(
+            "--timeout",
+            metavar="SECONDS",
+            help="Stop recording after this long. Without it, recording ends with the browser.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Record a browser session at URL and save what it requested as a local capture.
+
+    Every http and https exchange the session performs is recorded, until the
+    browser is closed. Credentials are removed before anything reaches the disk,
+    and the file is written so that only its owner can read it back.
+
+    The session runs in a throwaway browser profile, so it starts signed out and
+    leaves no cookie jar, history, or cache behind. The saved capture is what
+    inspect and generate read next.
+    """
+    if timeout is not None and timeout <= 0:
+        raise typer.BadParameter("--timeout must be greater than zero.")
+    try:
+        recorded = record_session(url, headless=headless, timeout_s=timeout)
+    except BrowserCaptureError as error:
+        _fail(str(error))
+    try:
+        saved = save_capture(recorded, output)
+    except CaptureFileError as error:
+        _fail(str(error))
+    typer.echo(_recording_summary(saved), nl=False)
+
+
+def _recording_summary(saved: SavedCapture) -> str:
+    """Return what the operator is told once a recording has been written."""
+    destination = str(saved.path)
+    lines = [f"Recorded {_count(len(saved.capture), 'request')} to {destination}."]
+    if saved.redacted_values:
+        lines.append(f"Redacted {_count(saved.redacted_values, 'value')} before writing it.")
+    else:
+        lines.append("No credentials were found to redact.")
+    lines.append(f"Inspect it with: trace2api inspect {destination}")
+    return "\n".join(lines) + "\n"
+
+
+def _count(number: int, noun: str) -> str:
+    """Return ``number`` and ``noun``, pluralized the ordinary way."""
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+@app.command()
 def inspect(
     capture: Annotated[
         Path,
         typer.Argument(
             metavar="CAPTURE",
-            help="Path to a HAR 1.2 archive recorded from a browser session.",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
             show_default=False,
         ),
     ],
@@ -98,7 +189,7 @@ def generate(
         Path,
         typer.Argument(
             metavar="CAPTURE",
-            help="Path to a HAR 1.2 archive recorded from a browser session.",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
             show_default=False,
         ),
     ],
@@ -140,12 +231,21 @@ def generate(
 
 
 def _load_capture(path: Path) -> Capture:
-    """Read a capture from ``path``, reporting an unreadable archive rather than raising."""
+    """Read a capture from ``path``, reporting an unreadable file rather than raising.
+
+    A saved capture and a HAR archive are both accepted, and which one it is follows from
+    what the file holds rather than from what it is called.
+    """
     try:
-        return load_har(path)
-    except HarImportError as error:
-        typer.echo(f"error: {error}", err=True)
-        raise typer.Exit(code=BAD_CAPTURE_EXIT_CODE) from None
+        return read_capture(path)
+    except (CaptureFileError, HarImportError) as error:
+        _fail(str(error))
+
+
+def _fail(reason: str) -> NoReturn:
+    """Report why a capture could not be obtained and stop with the capture exit code."""
+    typer.echo(f"error: {reason}", err=True)
+    raise typer.Exit(code=BAD_CAPTURE_EXIT_CODE)
 
 
 def main() -> None:
