@@ -28,12 +28,12 @@ and permitted data access against systems the operator is allowed to use.
 
 ## Status
 
-Early development. A HAR archive can be imported, redacted, inspected, and written out
-as a runnable cURL script, Python `httpx` module, or JavaScript `fetch` module from the
-command line. A live browser session can be recorded into the same capture models
-through the library, though the `record` command that saves one is not there yet. The
-inference, replay, and verification stages described above are not implemented yet. The
-Roadmap and Ticket Board below track what is real and what is planned.
+Early development. A live browser session can be recorded to a local capture, and a
+capture, recorded or imported from a HAR archive, can be inspected and written out as a
+runnable cURL script, Python `httpx` module, or JavaScript `fetch` module from the
+command line. The inference, replay, and verification stages described above are not
+implemented yet. The Roadmap and Ticket Board below track what is real and what is
+planned.
 
 ## Installation
 
@@ -58,8 +58,27 @@ $ playwright install chromium
 
 ## Quick start
 
-Export a HAR archive from the browser devtools network panel, or use the synthetic one
-in this repository, and look at what it holds:
+Record a workflow against a site the operator is allowed to use. A browser opens at the
+given address, and everything the session requests is recorded until the window is
+closed:
+
+```console
+$ trace2api record https://app.example.com/orders --output orders.json
+Recorded 41 requests to orders.json.
+Redacted 9 values before writing it.
+Inspect it with: trace2api inspect orders.json
+```
+
+Credentials are removed before anything reaches the disk, and the file is written so
+that only its owner can read it back. The session runs in a throwaway browser profile,
+so it starts signed out and leaves no cookie jar, history, or cache behind. Recording
+needs a browser, which the `[browser]` extra above installs.
+
+`inspect` and `generate` read that file, and they read a HAR archive exported from the
+devtools network panel just as well. The rest of this quick start uses the synthetic
+archive in this repository, so every line below can be reproduced from a clone.
+
+Look at what a capture holds:
 
 ```console
 $ trace2api inspect examples/storefront-orders.har
@@ -289,18 +308,23 @@ somewhere else, and running the file directly prints a line per response.
 
 - Installable `trace2api` package with a `src/` layout.
 - `trace2api --help` and `trace2api version`.
-- `trace2api inspect CAPTURE` reads a HAR archive, redacts it, and lists each request by
-  method, host, path, status, resource type, and relevance, with the noise summarized
-  rather than printed. `--all` lists the filtered requests, `--explain` names the rule
-  behind each verdict, and `--json` writes the same account as a JSON document. Query
-  strings are never rendered.
-- `trace2api generate CAPTURE` writes the requests a capture holds as a runnable cURL
-  script on standard output, numbered as `inspect` numbers them. Every credential becomes
-  a reference to an environment variable named after where the value came from, listed at
-  the top of the script. Headers curl derives for itself are left out with the rule behind
-  each omission stated, and a request the script cannot reproduce faithfully, such as one
-  with a binary body, says so rather than sending something else. `--all` writes the
-  filtered requests too.
+- `trace2api record URL` opens a browser at `URL`, records every http and https exchange
+  the session performs, and saves the result as a local capture file. Credentials are
+  removed before the file is written, and it is written with owner only permissions.
+  `--output` names the destination, `--headless` runs without a window, and `--timeout`
+  ends a recording that would otherwise run until the browser closes.
+- `trace2api inspect CAPTURE` reads a saved capture or a HAR archive, redacts it, and
+  lists each request by method, host, path, status, resource type, and relevance, with
+  the noise summarized rather than printed. `--all` lists the filtered requests,
+  `--explain` names the rule behind each verdict, and `--json` writes the same account as
+  a JSON document. Query strings are never rendered.
+- `trace2api generate CAPTURE` writes the requests a saved capture or a HAR archive
+  holds as a runnable cURL script on standard output, numbered as `inspect` numbers them.
+  Every credential becomes a reference to an environment variable named after where the
+  value came from, listed at the top of the script. Headers curl derives for itself are
+  left out with the rule behind each omission stated, and a request the script cannot
+  reproduce faithfully, such as one with a binary body, says so rather than sending
+  something else. `--all` writes the filtered requests too.
 - `trace2api generate CAPTURE --target python` writes the same requests as a Python
   module using `httpx`: a `run` function that sends them in the observed order and
   returns the responses, and a `main` that opens a client and reports what came back.
@@ -321,9 +345,15 @@ somewhere else, and running the file directly prints a line per response.
   http and https exchange it performs, with the response payloads of the requests the
   analysis reads, the durations the browser measured, and the requests that failed or
   were still in flight when recording stopped. It is available to code as
-  `trace2api.capture.record_session` and `trace2api.capture.recording`; the command that
-  saves a recording is T2A-011. Recording runs in a throwaway browser profile, so a
-  session leaves no cookie jar, history, or cache on disk.
+  `trace2api.capture.record_session` and `trace2api.capture.recording`. Recording runs in
+  a throwaway browser profile, so a session leaves no cookie jar, history, or cache on
+  disk.
+- A local capture file that holds a recording as it was observed, including the exchanges
+  that never settled, the browser that performed them, and the address the session
+  started at, none of which a HAR entry has a field for. Saving redacts first, so a
+  recording cannot reach the filesystem through `trace2api.capture.save_capture` with its
+  credentials still in it. Reading accepts either a saved capture or a HAR archive, and
+  decides which by what the file holds rather than by what it is called.
 - Typed traffic models for requests, responses, headers, query parameters, bodies,
   timings, entries, and capture metadata, with case insensitive header lookup, URL
   derived query parameters, validation of what cannot be replayed later, and JSON round
@@ -374,6 +404,14 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   generated client is the deliberate exception: it carries the whole URL because it has
   to reproduce the request, and the credentials in it are already variable references.
 - Generated clients read secrets from environment variables rather than embedding them.
+- A capture is redacted on the way to disk, not on the way back, so the file itself holds
+  no credentials. It is still written with owner only permissions, because a sanitized
+  recording still describes hosts, paths, and payloads that were not necessarily meant to
+  be shared.
+- Redacting a capture that was already redacted leaves it unchanged and still reports
+  where each secret belongs. That report, rather than the capture, is what lets a
+  generated client name the variable a value comes back under, so reading a capture from
+  disk does not cost the explanation of what the workflow needed.
 - A recorded session runs in a throwaway browser profile. The workflow starts signed out,
   and no cookie jar, history, or cache is left behind on disk.
 - Analysis runs on the local machine. No capture is uploaded.
@@ -433,6 +471,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-001 | Package scaffold and CLI entry point. `trace2api --help`, tests, and CI work. | Done | |
 | T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Done | T2A-001 |
 | T2A-003 | Secret redaction before persistence or display, with focused tests. | Done | T2A-002 |
+| T2A-031 | Redact credential shaped values inside recorded text bodies, such as a token written into a page script. Redaction currently leaves such a body as observed, so a live recording can persist a credential that appears nowhere else. | Ready | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -450,8 +489,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-010 | Browser Fetch/XHR recorder using Playwright or CDP. | Done | T2A-002 |
-| T2A-011 | `trace2api record` produces a sanitized inspectable local capture. | Ready | T2A-010, T2A-003 |
-| T2A-012 | Capture summary with total requests, filtered noise, likely application requests, and content types. | Backlog | T2A-011, T2A-005 |
+| T2A-011 | `trace2api record` produces a sanitized inspectable local capture. | Done | T2A-010, T2A-003 |
+| T2A-012 | Capture summary with total requests, filtered noise, likely application requests, and content types. | Ready | T2A-011, T2A-005 |
 
 ### Phase 3: Differential inference
 
@@ -485,7 +524,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Backlog | T2A-011 |
+| T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Ready | T2A-011 |
 | T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Backlog | T2A-026, T2A-017 |
 | T2A-028 | README end to end demo using verified real output. | Backlog | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Backlog | T2A-001 |
@@ -516,7 +555,8 @@ The browser recorder is covered the same way. Most of its tests drive it with st
 request objects, and two record a real Chromium session against a local HTTP server.
 Those two are skipped where Playwright or a browser build is missing. Where a machine
 has a Chromium binary that Playwright did not download itself, `TRACE2API_TEST_CHROMIUM`
-points them at it.
+points them at it. The tests for the `record` command stand in for the recorder itself,
+so what the command does with a recording is checked without a browser.
 
 Layout:
 
@@ -532,6 +572,7 @@ src/trace2api/
     capture/
         browser.py
         har.py
+        store.py
     generate/
         curl.py
         headers.py
@@ -562,9 +603,19 @@ the recorder separates noting an event from reading what it refers to: handlers 
 that something happened, and draining performs the reads from the thread driving the
 session, while the browser still holds the payloads.
 
+`store.py` is where a capture is kept between runs. Saving redacts before it writes, for
+the same reason inspection redacts before it renders: putting the order in one place
+means no caller can write a capture that has not been through it. Reading takes a saved
+capture or a HAR archive and decides which by what the file holds, so a command does not
+have to be told which it was handed.
+
 `sanitize/` removes credentials from a capture. `policy.py` decides what counts as one,
 `redact.py` rewrites the capture and records what it took out. Every stage that persists
-or displays a capture passes it through `redact_capture` first.
+or displays a capture passes it through `redact_capture` first. Redacting a capture that
+is already redacted is the ordinary case rather than a special one, because that is how a
+capture read back from disk arrives: the placeholders stay as they are, and the report
+still accounts for each of them, which is what later stages read to learn where a secret
+belonged.
 
 `analyze/` works out what a capture means. `relevance.py` is the first step: it decides
 which requests carry the workflow and which are page furniture, and records the rule
@@ -592,6 +643,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
 - 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
