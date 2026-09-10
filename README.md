@@ -361,7 +361,10 @@ somewhere else, and running the file directly prints a line per response.
 - Credential redaction over a capture, covering credential headers, cookie values,
   `Authorization` style values, credential named query parameters, JSON and form fields,
   URL userinfo, and token shaped values, with a report of what was removed by location
-  and rule.
+  and rule. A body that is not a structure redaction can read, such as a page or a
+  script, is scanned as text instead, so a token assigned to a named field, handed over
+  in a `meta` element, or written out in full is removed where it sits while everything
+  around it survives.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -395,10 +398,18 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   while the value itself is gone.
 - Redaction is name based and shape based, so every removal can be explained by the rule
   that caused it. It reports what it removed by location and rule, never by value.
-- Bodies that cannot be parsed, such as binary payloads and unknown text formats, are
-  left as observed rather than blanked, because the analysis stages read them. A secret
-  in such a body is removed only where it also appears in a header, a query string, or a
-  structured field.
+- A body that is not a structure redaction can read is read as text. A page hands its own
+  scripts a CSRF token that appears nowhere else in a workflow, so a credential named
+  field assigned a quoted value, a `meta` element naming what it carries, and a token
+  written out in full are all replaced where they sit. Only the values move: the markup
+  and code around them are left as observed, because the analysis stages read them.
+- Binary payloads are the exception. Nothing in them can be located without decoding a
+  format redaction does not claim to understand, so they are left alone, and a secret in
+  one is removed only where it also appears in a header, a query string, or a structured
+  field.
+- An unquoted value is left as observed. A bare word after an equals sign is as likely to
+  be an expression, a keyword, or a media type as a secret, and replacing those would cost
+  the inference stages more than it protects.
 - Nothing an inspection prints carries a query string. Query strings routinely hold
   tokens and identifiers, and an endpoint is recognizable from its path alone. A
   generated client is the deliberate exception: it carries the whole URL because it has
@@ -471,7 +482,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-001 | Package scaffold and CLI entry point. `trace2api --help`, tests, and CI work. | Done | |
 | T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Done | T2A-001 |
 | T2A-003 | Secret redaction before persistence or display, with focused tests. | Done | T2A-002 |
-| T2A-031 | Redact credential shaped values inside recorded text bodies, such as a token written into a page script. Redaction currently leaves such a body as observed, so a live recording can persist a credential that appears nowhere else. | Ready | T2A-003 |
+| T2A-031 | Redact credential shaped values inside recorded text bodies, such as a token written into a page script. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -610,7 +621,10 @@ capture or a HAR archive and decides which by what the file holds, so a command 
 have to be told which it was handed.
 
 `sanitize/` removes credentials from a capture. `policy.py` decides what counts as one,
-`redact.py` rewrites the capture and records what it took out. Every stage that persists
+`redact.py` rewrites the capture and records what it took out. Where a payload is a
+structure, its fields are judged by their own names and shapes. Where it is not, the text
+is searched for the same credentials rather than being handed over whole or blanked,
+which is what keeps a token that only ever appeared in a page out of a saved capture. Every stage that persists
 or displays a capture passes it through `redact_capture` first. Redacting a capture that
 is already redacted is the ordinary case rather than a special one, because that is how a
 capture read back from disk arrives: the placeholders stay as they are, and the report
@@ -643,6 +657,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
 - 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
 - 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
