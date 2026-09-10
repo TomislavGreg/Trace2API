@@ -8,12 +8,16 @@ avoided: it produces redactions nobody can account for and misses short secrets.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from enum import StrEnum
+from typing import NamedTuple
 
 __all__ = [
     "COOKIE_HEADERS",
     "CREDENTIAL_SCHEME_HEADERS",
+    "EmbeddedSecret",
     "RedactionRule",
+    "find_embedded_secrets",
     "is_jwt_shaped",
     "is_sensitive_header",
     "is_sensitive_name",
@@ -35,6 +39,8 @@ class RedactionRule(StrEnum):
     SENSITIVE_PARAMETER = "sensitive-parameter"
     JWT_SHAPED_VALUE = "jwt-shaped-value"
     URL_USERINFO = "url-userinfo"
+    EMBEDDED_ASSIGNMENT = "embedded-assignment"
+    EMBEDDED_META_CONTENT = "embedded-meta-content"
 
 
 CREDENTIAL_SCHEME_HEADERS = frozenset({"authorization", "proxy-authorization"})
@@ -100,6 +106,46 @@ outside a query string would redact values the later inference stages depend on.
 
 _JWT_PATTERN = re.compile(r"^eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$")
 
+_EMBEDDED_ASSIGNMENT = re.compile(
+    r"""
+    (?P<name_quote>["'])?
+    (?P<name>[A-Za-z_][A-Za-z0-9_.\-]{0,62})
+    (?(name_quote)(?P=name_quote))
+    \s*[:=]\s*
+    (?P<value_quote>["'])(?P<value>[^"'\\\r\n]+)(?P=value_quote)
+    """,
+    re.VERBOSE,
+)
+"""A named field assigned a quoted value, as written in a script or a markup attribute.
+
+Only quoted values are recognized. An unquoted one cannot be told from the expression,
+keyword, or media type that follows an equals sign in the same text, and replacing those
+would cost the inference stages more than it protects.
+"""
+
+_EMBEDDED_TOKEN = re.compile(
+    r"(?<![A-Za-z0-9_.\-])eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*(?![A-Za-z0-9_-])"
+)
+"""A JSON Web Token written into surrounding text, recognized by shape alone."""
+
+_HTML_META_TAG = re.compile(r"""<meta\b(?:"[^"]*"|'[^']*'|[^<>"'])*>""", re.IGNORECASE)
+"""A ``meta`` element. Quoted attributes are read whole, since a value can hold ``>``."""
+
+_HTML_ATTRIBUTE = re.compile(
+    r"""(?P<name>[A-Za-z_:][A-Za-z0-9_:.\-]*)\s*=\s*(?P<quote>["'])(?P<value>[^"']*)(?P=quote)"""
+)
+
+_META_NAMING_ATTRIBUTES = frozenset({"id", "itemprop", "name", "property"})
+"""Attributes that say what a ``meta`` element carries. Its value is in ``content``."""
+
+_PLAIN_NAME = re.compile(r"[A-Za-z0-9_:.\-]{1,64}")
+"""What a reported field name may look like.
+
+A name taken out of a page is written into a redaction report, and from there into the
+comment a generated client carries. Anything but a plain name is not treated as one, so
+nothing a page chooses to call itself can break out of the line it is printed on.
+"""
+
 
 def normalize_name(name: str) -> str:
     """Return ``name`` with case, spacing, and separators removed for comparison.
@@ -147,3 +193,107 @@ def is_jwt_shaped(value: str) -> bool:
     which keeps ordinary dotted values from matching.
     """
     return bool(_JWT_PATTERN.match(value.strip()))
+
+
+class EmbeddedSecret(NamedTuple):
+    """Where a credential shaped value sits inside text that is kept as observed.
+
+    ``start`` and ``end`` bound the value itself rather than what surrounds it, so the
+    text it was written into survives the replacement. ``name`` is the field the value
+    was assigned to, when a name is what gave it away.
+    """
+
+    start: int
+    end: int
+    rule: RedactionRule
+    name: str | None = None
+
+
+def find_embedded_secrets(text: str) -> tuple[EmbeddedSecret, ...]:
+    """Return the credential shaped values written into ``text``, in the order they sit.
+
+    Structured payloads are read as the structures they are elsewhere. This covers what
+    is left: a page, a script, a stylesheet, an unparsable payload, or a string inside a
+    structure, all of which are kept as observed because the inference stages read them,
+    and any of which can carry a token that appears nowhere else in a capture.
+
+    The findings never overlap, so a caller can replace them in one pass. Where two rules
+    reach the same text, the wider finding stands, and a name outranks a shape over the
+    same span: a token assigned to a named field is reported as the field it was given to.
+    """
+    candidates = sorted(
+        (*_find_assignments(text), *_find_meta_content(text), *_find_tokens(text)),
+        key=lambda item: (item.start, -item.end),
+    )
+    found: list[EmbeddedSecret] = []
+    for candidate in candidates:
+        if found and candidate.start < found[-1].end:
+            continue
+        found.append(candidate)
+    return tuple(found)
+
+
+def _find_assignments(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the quoted values assigned to credential named fields."""
+    position = 0
+    while (match := _EMBEDDED_ASSIGNMENT.search(text, position)) is not None:
+        if _names_a_credential(match.group("name")):
+            yield EmbeddedSecret(
+                match.start("value"),
+                match.end("value"),
+                RedactionRule.EMBEDDED_ASSIGNMENT,
+                match.group("name"),
+            )
+            position = match.end("value")
+            continue
+        # Resume inside the value rather than after it: a value that is not itself a
+        # credential can still have one written inside it, as a page script does.
+        position = match.end("name")
+
+
+def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the ``content`` of every ``meta`` element that names a credential.
+
+    A page hands a token to its own scripts this way, and the name saying what the value
+    is sits in a different attribute from the value itself.
+    """
+    for tag in _HTML_META_TAG.finditer(text):
+        attributes = list(_HTML_ATTRIBUTE.finditer(tag.group()))
+        named = next(
+            (
+                attribute.group("value")
+                for attribute in attributes
+                if attribute.group("name").lower() in _META_NAMING_ATTRIBUTES
+                and _PLAIN_NAME.fullmatch(attribute.group("value"))
+                and is_sensitive_name(attribute.group("value"))
+            ),
+            None,
+        )
+        if named is None:
+            continue
+        for attribute in attributes:
+            if attribute.group("name").lower() == "content" and attribute.group("value"):
+                yield EmbeddedSecret(
+                    tag.start() + attribute.start("value"),
+                    tag.start() + attribute.end("value"),
+                    RedactionRule.EMBEDDED_META_CONTENT,
+                    named,
+                )
+
+
+def _find_tokens(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the token shaped values written into ``text``."""
+    for match in _EMBEDDED_TOKEN.finditer(text):
+        yield EmbeddedSecret(match.start(), match.end(), RedactionRule.JWT_SHAPED_VALUE)
+
+
+def _names_a_credential(name: str) -> bool:
+    """Return whether an assigned field names a credential.
+
+    A dotted path is judged by its last segment as well as whole, so ``document.cookie``
+    is recognized by the property being written rather than by the object holding it.
+    """
+    if is_sensitive_name(name):
+        return True
+    segment = name.rsplit(".", 1)[-1]
+    return segment != name and is_sensitive_name(segment)

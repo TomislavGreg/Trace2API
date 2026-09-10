@@ -15,12 +15,15 @@ and the report still accounts for each one. The report, not the capture, is what
 where a secret belonged, and a stage such as code generation needs that to name the
 variable a value comes back under.
 
-What redaction does not do: bodies it cannot parse (binary payloads, unknown text
-formats) are left untouched, because blanking them would destroy the evidence the
-inference stages read. Sensitive material in such a body is caught only if it also
-appears in a header, a query string, or a structured field. Nor does a credential named
-field hide its whole subtree: an object under such a name is walked into on its own
-terms, so its leaves are judged by their own names and shapes.
+A body redaction cannot read as a structure is still read as text. A page, a script, or
+an unparsable payload keeps everything about it that the inference stages read, and the
+credential shaped values written into it are replaced where they sit. Binary payloads
+are the exception: nothing in them can be located without decoding a format redaction
+does not claim to understand, so they are left as observed and are caught only where the
+same value also appears in a header, a query string, or a structured field.
+
+Nor does a credential named field hide its whole subtree: an object under such a name is
+walked into on its own terms, so its leaves are judged by their own names and shapes.
 """
 
 from __future__ import annotations
@@ -41,6 +44,7 @@ from trace2api.sanitize.policy import (
     COOKIE_HEADERS,
     CREDENTIAL_SCHEME_HEADERS,
     RedactionRule,
+    find_embedded_secrets,
     is_jwt_shaped,
     is_sensitive_header,
     is_sensitive_name,
@@ -373,15 +377,16 @@ class _Redactor:
             return self._redact_json_body(body, location)
         if body.media_type == _FORM_MEDIA_TYPE:
             return self._redact_form_body(body, location)
-        return body
+        return self._redact_text_body(body, location)
 
     def _redact_json_body(self, body: Body, location: str) -> Body:
         try:
             document = json.loads(body.text or "")
         except ValueError:
-            # A body that does not parse is left as observed. The importer reports
-            # malformed payloads; redaction is not the stage that judges them.
-            return body
+            # A body that does not parse is read as text instead. The importer reports
+            # malformed payloads; redaction is not the stage that judges them, and a
+            # credential in one is still a credential.
+            return self._redact_text_body(body, location)
         redacted, changed = self._redact_json_value(document, location)
         if not changed:
             return body
@@ -407,9 +412,41 @@ class _Redactor:
                 for index, item in enumerate(value)
             ]
             return [item for item, _ in items], any(item_changed for _, item_changed in items)
-        if isinstance(value, str) and is_jwt_shaped(value):
-            return self._replace(value, location, RedactionRule.JWT_SHAPED_VALUE), True
+        if isinstance(value, str):
+            if is_jwt_shaped(value):
+                return self._replace(value, location, RedactionRule.JWT_SHAPED_VALUE), True
+            # A string leaf can hold a page or a script of its own, so it is read as
+            # text as well as judged by the name it sits under.
+            redacted = self._redact_text(value, location)
+            return redacted, redacted != value
         return value, False
+
+    def _redact_text_body(self, body: Body, location: str) -> Body:
+        """Replace the credentials written into a body that is otherwise kept as observed."""
+        text = body.text or ""
+        redacted = self._redact_text(text, location)
+        if redacted == text:
+            return body
+        return body.model_copy(update={"text": redacted})
+
+    def _redact_text(self, text: str, location: str) -> str:
+        """Replace the credential shaped values in ``text``, leaving the rest of it alone.
+
+        Only the values move. What surrounds them is what tells a later stage where the
+        request came from, and a page with its scripts blanked would explain nothing.
+        """
+        found = find_embedded_secrets(text)
+        if not found:
+            return text
+        pieces: list[str] = []
+        position = 0
+        for secret in found:
+            where = location if secret.name is None else f"{location}.{secret.name}"
+            pieces.append(text[position : secret.start])
+            pieces.append(self._replace(text[secret.start : secret.end], where, secret.rule))
+            position = secret.end
+        pieces.append(text[position:])
+        return "".join(pieces)
 
     def _redact_form_body(self, body: Body, location: str) -> Body:
         pairs = parse_qsl(body.text or "", keep_blank_values=True)

@@ -7,7 +7,9 @@ a generator without passing it through :func:`redact_capture` first.
 from __future__ import annotations
 
 from trace2api.sanitize.policy import (
+    EmbeddedSecret,
     RedactionRule,
+    find_embedded_secrets,
     is_jwt_shaped,
     is_sensitive_header,
     is_sensitive_name,
@@ -24,11 +26,13 @@ from trace2api.sanitize.redact import (
 )
 
 __all__ = [
+    "EmbeddedSecret",
     "Redaction",
     "RedactionReport",
     "RedactionResult",
     "RedactionRule",
     "SecretSegment",
+    "find_embedded_secrets",
     "is_jwt_shaped",
     "is_redacted",
     "is_sensitive_header",

@@ -22,6 +22,7 @@ from trace2api.models import (
 )
 from trace2api.sanitize import (
     RedactionRule,
+    find_embedded_secrets,
     is_jwt_shaped,
     is_redacted,
     is_sensitive_header,
@@ -71,6 +72,10 @@ def json_body(payload: object) -> Body:
     return Body(mime_type="application/json", text=json.dumps(payload))
 
 
+def html_body(markup: str) -> Body:
+    return Body(mime_type="text/html; charset=utf-8", text=markup)
+
+
 class TestPolicy:
     @pytest.mark.parametrize(
         "name",
@@ -115,6 +120,37 @@ class TestPolicy:
     )
     def test_ordinary_dotted_values_are_not_tokens(self, value: str) -> None:
         assert not is_jwt_shaped(value)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            ':root{--gap:8px}body{font:"Inter"}',
+            "export const boot=()=>void 0;",
+            'fetch(url, {headers: {"Accept": "application/json"}})',
+            '<link rel="stylesheet" href="/static/app.css">',
+            "",
+        ],
+    )
+    def test_ordinary_text_holds_nothing_credential_shaped(self, text: str) -> None:
+        assert find_embedded_secrets(text) == ()
+
+    def test_findings_are_ordered_and_do_not_overlap(self) -> None:
+        text = f'var a = "{FAKE_JWT}"; var apiKey = "key-abc123";'
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [
+            RedactionRule.JWT_SHAPED_VALUE,
+            RedactionRule.EMBEDDED_ASSIGNMENT,
+        ]
+        assert [text[item.start : item.end] for item in found] == [FAKE_JWT, "key-abc123"]
+
+    def test_a_named_value_is_not_reported_again_for_its_shape(self) -> None:
+        found = find_embedded_secrets(f'var apiKey = "{FAKE_JWT}";')
+        assert [item.rule for item in found] == [RedactionRule.EMBEDDED_ASSIGNMENT]
+
+    def test_a_reported_name_is_always_a_plain_name(self) -> None:
+        """A name is printed in a report and in a generated client, so a page cannot pick it."""
+        found = find_embedded_secrets('<meta name="api\nkey: rm -rf /\ntoken" content="s3cr3t">')
+        assert found == ()
 
 
 class TestHeaderRedaction:
@@ -323,11 +359,15 @@ class TestBodyRedaction:
         assert entry.request.body == body
         assert locations == []
 
-    def test_malformed_json_is_left_as_observed(self) -> None:
+    def test_malformed_json_is_read_as_text(self) -> None:
+        """An archive that truncated a payload still handed over whatever it holds."""
         body = Body(mime_type="application/json", text='{"password": "hunter2"')
         entry, locations = redact(make_capture(method="POST", request_body=body))
-        assert entry.request.body == body
-        assert locations == []
+        assert entry.request.body is not None
+        text = entry.request.body.text or ""
+        assert "hunter2" not in text
+        assert text.startswith('{"password": ')
+        assert locations == ["request.body.password"]
 
     def test_binary_bodies_are_left_as_observed(self) -> None:
         body = Body(mime_type="image/png", text="aGVsbG8=", encoding="base64")
@@ -335,6 +375,97 @@ class TestBodyRedaction:
         assert entry.response is not None
         assert entry.response.body == body
         assert locations == []
+
+
+class TestEmbeddedInText:
+    """Credentials written into a body that is kept as observed rather than parsed."""
+
+    def test_a_token_assigned_in_a_page_script_is_replaced(self) -> None:
+        page = html_body(
+            '<script>window.csrfToken = "tok-abc123";'
+            'window.buildId = "4f2b91";</script><div id="app"></div>'
+        )
+        entry, locations = redact(make_capture(response=Response(status=200, body=page)))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "tok-abc123" not in text
+        assert 'window.buildId = "4f2b91"' in text
+        assert '<div id="app"></div>' in text
+        assert locations == ["response.body.window.csrfToken"]
+
+    def test_a_meta_tag_hands_its_content_over_by_name(self) -> None:
+        page = html_body(
+            '<meta name="csrf-token" content="tok-abc123">'
+            '<meta name="viewport" content="width=device-width">'
+        )
+        entry, locations = redact(make_capture(response=Response(status=200, body=page)))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "tok-abc123" not in text
+        assert 'content="width=device-width"' in text
+        assert 'name="csrf-token"' in text
+        assert locations == ["response.body.csrf-token"]
+
+    def test_a_token_shaped_value_needs_no_name(self) -> None:
+        script = Body(mime_type="text/javascript", text=f'const ctx = "{FAKE_JWT}";')
+        entry, locations = redact(make_capture(response=Response(status=200, body=script)))
+        assert entry.response is not None and entry.response.body is not None
+        assert FAKE_JWT not in (entry.response.body.text or "")
+        assert locations == ["response.body"]
+
+    def test_a_credential_inside_an_ordinary_assignment_is_still_found(self) -> None:
+        script = Body(
+            mime_type="text/javascript",
+            text='if (ready) { document.cookie = "session=abc123; path=/"; }',
+        )
+        entry, locations = redact(make_capture(response=Response(status=200, body=script)))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "abc123" not in text
+        assert text.startswith("if (ready) { document.cookie = ")
+        assert locations == ["response.body.document.cookie"]
+
+    def test_a_body_with_nothing_credential_shaped_is_returned_unchanged(self) -> None:
+        page = html_body('<!doctype html><title>Orders</title><div id="app"></div>')
+        entry, locations = redact(make_capture(response=Response(status=200, body=page)))
+        assert entry.response is not None
+        assert entry.response.body == page
+        assert locations == []
+
+    def test_an_unquoted_value_is_left_as_observed(self) -> None:
+        """A bare word after an equals sign is as likely to be an expression as a secret."""
+        script = Body(mime_type="text/javascript", text="const token = readToken(store);")
+        entry, locations = redact(make_capture(response=Response(status=200, body=script)))
+        assert entry.response is not None
+        assert entry.response.body == script
+        assert locations == []
+
+    def test_a_string_inside_a_json_response_is_read_as_text_too(self) -> None:
+        response = Response(
+            status=200, body=json_body({"html": '<b>x</b><i data-secret="s3cr3t">'})
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "s3cr3t" not in text
+        assert "<b>x</b>" in text
+        assert locations == ["response.body.html.data-secret"]
+
+    def test_a_request_body_credential_is_reported_against_the_request(self) -> None:
+        """A generated client reads the report to name the variable a value comes back under."""
+        body = Body(mime_type="text/plain", text='apiKey: "key-abc123"')
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        assert "key-abc123" not in (entry.request.body.text or "")
+        assert locations == ["request.body.apiKey"]
+
+    def test_redacting_twice_changes_nothing_further(self) -> None:
+        page = html_body('<meta name="csrf-token" content="tok-abc123">')
+        capture = make_capture(response=Response(status=200, body=page))
+        once = redact_capture(capture, salt=SALT)
+        twice = redact_capture(once.capture, salt=SALT)
+        assert twice.capture == once.capture
+        assert twice.report == once.report
 
 
 class TestReport:
