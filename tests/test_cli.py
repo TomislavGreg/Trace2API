@@ -51,6 +51,7 @@ def test_help_lists_the_commands() -> None:
     output = _unwrapped(runner.invoke(app, ["--help"]).output)
     assert "version" in output
     assert "record" in output
+    assert "summary" in output
     assert "inspect" in output
     assert "generate" in output
 
@@ -91,6 +92,72 @@ def har_entry(url: str, *, resource_type: str = "xhr", **request: Any) -> dict[s
             "content": {"size": 2, "mimeType": "application/json", "text": "{}"},
         },
     }
+
+
+class TestSummaryCommand:
+    def test_counts_what_the_capture_holds(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        result = runner.invoke(app, ["summary", str(archive)])
+        assert result.exit_code == 0
+        assert "Requests: 2 total, 1 kept, 1 filtered as noise." in result.stdout
+        assert "Kept: 1 application." in result.stdout
+        assert "Noise: 1 asset-resource-type." in result.stdout
+        assert "Kept content types: 1 application/json." in result.stdout
+
+    def test_no_path_is_printed(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        result = runner.invoke(app, ["summary", str(archive)])
+        assert result.exit_code == 0
+        assert "/api/v1/orders" not in result.stdout
+        assert "shop.example.com" in result.stdout
+
+    def test_json_reports_the_same_counts(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        result = runner.invoke(app, ["summary", str(archive), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["total_requests"] == 2
+        assert payload["counts_by_relevance"] == {"application": 1, "noise": 1, "unknown": 0}
+        assert payload["noise_by_rule"] == {"asset-resource-type": 1}
+        assert payload["kept_content_types"] == [{"media_type": "application/json", "count": 1}]
+
+    def test_credentials_are_redacted_before_anything_is_counted(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders?access_token=super-secret",
+                headers=[{"name": "Authorization", "value": "Bearer super-secret"}],
+            ),
+        )
+        result = runner.invoke(app, ["summary", str(archive), "--json"])
+        assert result.exit_code == 0
+        assert "super-secret" not in result.output
+        assert json.loads(result.stdout)["redacted_values"] == 2
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["summary", str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+        assert result.stdout == ""
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["summary"]).exit_code != 0
+
+    @pytest.mark.parametrize("arguments", [[], ["--json"]])
+    def test_the_shipped_example_summarizes(self, arguments: list[str]) -> None:
+        result = runner.invoke(app, ["summary", str(EXAMPLE_HAR), *arguments])
+        assert result.exit_code == 0
+        assert "shop.example.com" in result.stdout
 
 
 class TestInspectCommand:
@@ -372,9 +439,62 @@ class TestRecordCommand:
         )
 
         assert result.exit_code == 0
-        assert f"Recorded 2 requests to {destination}." in result.stdout
+        assert f"Recorded 2 requests to {destination}: 2 application." in result.stdout
         assert "No credentials were found to redact." in result.stdout
         assert f"trace2api inspect {destination}" in result.stdout
+
+    def test_reports_how_much_of_a_recording_is_noise(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "session.json"
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                ),
+                entries=[
+                    recorded_entry("b0001", "https://shop.example.com/orders"),
+                    recorded_entry("b0002", "https://shop.example.com/api/v1/orders"),
+                    recorded_entry(
+                        "b0003",
+                        "https://cdn.example.com/static/app.css",
+                        resource_type=ResourceType.STYLESHEET,
+                    ),
+                ],
+            ),
+        )
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(destination)]
+        )
+
+        assert result.exit_code == 0
+        assert f"Recorded 3 requests to {destination}: 2 application, 1 noise." in result.stdout
+
+    def test_reports_an_empty_recording_without_a_breakdown(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        destination = tmp_path / "session.json"
+        monkeypatch.setattr(
+            cli,
+            "record_session",
+            lambda url, **kwargs: Capture(
+                metadata=CaptureMetadata(
+                    source=CaptureSource.BROWSER,
+                    created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+                )
+            ),
+        )
+
+        result = runner.invoke(
+            app, ["record", "https://shop.example.com/orders", "-o", str(destination)]
+        )
+
+        assert result.exit_code == 0
+        assert f"Recorded 0 requests to {destination}." in result.stdout
 
     def test_credentials_never_reach_the_saved_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

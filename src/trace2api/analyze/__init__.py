@@ -19,10 +19,20 @@ from trace2api.analyze.relevance import (
     classify_entry,
     filter_capture,
 )
+from trace2api.analyze.summary import (
+    UNDECLARED_CONTENT_TYPE,
+    CaptureSummary,
+    ContentTypeCount,
+    render_summary,
+    summarize_capture,
+)
 
 __all__ = [
     "DEFAULT_KEPT",
+    "UNDECLARED_CONTENT_TYPE",
+    "CaptureSummary",
     "Classification",
+    "ContentTypeCount",
     "FilterReport",
     "FilterResult",
     "FilterRule",
@@ -30,4 +40,6 @@ __all__ = [
     "classify_capture",
     "classify_entry",
     "filter_capture",
+    "render_summary",
+    "summarize_capture",
 ]
