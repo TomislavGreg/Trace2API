@@ -9,7 +9,13 @@ from typing import Annotated, NoReturn
 import typer
 
 from trace2api import __version__
-from trace2api.analyze import DEFAULT_KEPT, Relevance
+from trace2api.analyze import (
+    DEFAULT_KEPT,
+    Relevance,
+    classify_capture,
+    render_summary,
+    summarize_capture,
+)
 from trace2api.capture import (
     BrowserCaptureError,
     CaptureFileError,
@@ -123,9 +129,20 @@ def record(
 
 
 def _recording_summary(saved: SavedCapture) -> str:
-    """Return what the operator is told once a recording has been written."""
+    """Return what the operator is told once a recording has been written.
+
+    The relevance breakdown comes first because it is what says whether the recording
+    caught the workflow. ``trace2api summary`` reports the same counts in full.
+    """
     destination = str(saved.path)
-    lines = [f"Recorded {_count(len(saved.capture), 'request')} to {destination}."]
+    recorded = f"Recorded {_count(len(saved.capture), 'request')} to {destination}"
+    counts = classify_capture(saved.capture).counts_by_relevance()
+    breakdown = ", ".join(
+        f"{counts[relevance]} {relevance.value}"
+        for relevance in (*DEFAULT_KEPT, Relevance.NOISE)
+        if counts[relevance]
+    )
+    lines = [f"{recorded}: {breakdown}." if breakdown else f"{recorded}."]
     if saved.redacted_values:
         lines.append(f"Redacted {_count(saved.redacted_values, 'value')} before writing it.")
     else:
@@ -137,6 +154,38 @@ def _recording_summary(saved: SavedCapture) -> str:
 def _count(number: int, noun: str) -> str:
     """Return ``number`` and ``noun``, pluralized the ordinary way."""
     return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+@app.command()
+def summary(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the summary as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Count what a capture holds rather than listing it.
+
+    Reports the total traffic, how much of it is kept as likely application requests,
+    how much was filtered as noise and by which rule, and what the kept requests
+    answered with.
+
+    Credentials are redacted before anything is counted, and no path or payload is
+    printed, so a summary describes a recording without quoting it.
+    """
+    recorded = _load_capture(capture)
+    counted = summarize_capture(recorded)
+    if as_json:
+        typer.echo(counted.as_json())
+        return
+    typer.echo(render_summary(counted), nl=False)
 
 
 @app.command()
