@@ -8,6 +8,18 @@ be inspected rather than trusted.
 
 from __future__ import annotations
 
+from trace2api.analyze.diff import (
+    REDACTED_DISPLAY,
+    AlignmentRule,
+    CaptureDiff,
+    ChangeKind,
+    ComparedCapture,
+    PairedRequest,
+    UnpairedRequest,
+    ValueChange,
+    diff_captures,
+    render_diff,
+)
 from trace2api.analyze.relevance import (
     DEFAULT_KEPT,
     Classification,
@@ -29,17 +41,27 @@ from trace2api.analyze.summary import (
 
 __all__ = [
     "DEFAULT_KEPT",
+    "REDACTED_DISPLAY",
     "UNDECLARED_CONTENT_TYPE",
+    "AlignmentRule",
+    "CaptureDiff",
     "CaptureSummary",
+    "ChangeKind",
     "Classification",
+    "ComparedCapture",
     "ContentTypeCount",
     "FilterReport",
     "FilterResult",
     "FilterRule",
+    "PairedRequest",
     "Relevance",
+    "UnpairedRequest",
+    "ValueChange",
     "classify_capture",
     "classify_entry",
+    "diff_captures",
     "filter_capture",
+    "render_diff",
     "render_summary",
     "summarize_capture",
 ]
