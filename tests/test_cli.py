@@ -26,7 +26,9 @@ from trace2api.models import (
 
 runner = CliRunner()
 
-EXAMPLE_HAR = Path(__file__).resolve().parent.parent / "examples" / "storefront-orders.har"
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+EXAMPLE_HAR = EXAMPLES / "storefront-orders.har"
+SECOND_RUN_HAR = EXAMPLES / "storefront-orders-second-run.har"
 
 
 def test_help_exits_successfully() -> None:
@@ -53,6 +55,7 @@ def test_help_lists_the_commands() -> None:
     assert "record" in output
     assert "summary" in output
     assert "inspect" in output
+    assert "diff" in output
     assert "generate" in output
 
 
@@ -235,6 +238,114 @@ class TestInspectCommand:
         result = runner.invoke(app, ["inspect", str(EXAMPLE_HAR), *arguments])
         assert result.exit_code == 0
         assert "shop.example.com" in result.stdout
+
+
+class TestDiffCommand:
+    def test_reports_which_request_values_changed(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=open"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=shipped"),
+        )
+        result = runner.invoke(app, ["diff", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "1 -> 1  GET shop.example.com/api/v1/orders" in result.stdout
+        assert 'request.query[status]  changed  "open" -> "shipped"' in result.stdout
+        assert "Paired 1 request: 1 changed, 0 unchanged." in result.stdout
+
+    def test_an_unchanged_request_is_counted_rather_than_listed(self, tmp_path: Path) -> None:
+        archived = har_entry("https://shop.example.com/api/v1/orders")
+        first = write_har(tmp_path / "first.har", archived)
+        second = write_har(tmp_path / "second.har", archived)
+        result = runner.invoke(app, ["diff", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "Paired 1 request: 0 changed, 1 unchanged." in result.stdout
+        assert "/api/v1/orders" not in result.stdout
+
+    def test_unchanged_requests_can_be_listed(self, tmp_path: Path) -> None:
+        archived = har_entry("https://shop.example.com/api/v1/orders")
+        first = write_har(tmp_path / "first.har", archived)
+        second = write_har(tmp_path / "second.har", archived)
+        result = runner.invoke(app, ["diff", str(first), str(second), "--unchanged"])
+        assert result.exit_code == 0
+        assert "no request value changed" in result.stdout
+
+    def test_noise_is_compared_only_when_asked(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://cdn.example.com/img/logo.png", resource_type="image"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://cdn.example.com/img/logo.png", resource_type="image"),
+        )
+        without = runner.invoke(app, ["diff", str(first), str(second)])
+        assert "Comparing 0 kept requests on the left with 0 on the right." in without.stdout
+        with_noise = runner.invoke(app, ["diff", str(first), str(second), "--all"])
+        assert "Comparing 1 kept request on the left with 1 on the right." in with_noise.stdout
+
+    def test_json_reports_the_same_comparison(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=open"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=shipped"),
+        )
+        result = runner.invoke(app, ["diff", str(first), str(second), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["pairs"][0]["changes"] == [
+            {
+                "location": "request.query[status]",
+                "kind": "changed",
+                "left": "open",
+                "right": "shipped",
+            }
+        ]
+
+    def test_credentials_are_redacted_before_anything_is_compared(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Authorization", "value": "Bearer super-secret"}],
+            ),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Authorization", "value": "Bearer other-secret"}],
+            ),
+        )
+        result = runner.invoke(app, ["diff", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "secret" not in result.output
+        assert '"Bearer (redacted)" -> "Bearer (redacted)"' in result.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        result = runner.invoke(app, ["diff", str(archive), str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+
+    def test_two_captures_are_required(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        assert runner.invoke(app, ["diff", str(archive)]).exit_code != 0
+
+    def test_the_shipped_examples_compare(self) -> None:
+        result = runner.invoke(app, ["diff", str(EXAMPLE_HAR), str(SECOND_RUN_HAR)])
+        assert result.exit_code == 0
+        assert "Paired 4 requests: 3 changed, 1 unchanged." in result.stdout
 
 
 class TestGenerateCommand:
