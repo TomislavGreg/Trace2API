@@ -31,9 +31,10 @@ and permitted data access against systems the operator is allowed to use.
 Early development. A live browser session can be recorded to a local capture, and a
 capture, recorded or imported from a HAR archive, can be summarized, inspected, and
 written out as a runnable cURL script, Python `httpx` module, or JavaScript `fetch`
-module from the command line. The inference, replay, and verification stages described
-above are not implemented yet. The Roadmap and Ticket Board below track what is real and
-what is planned.
+module from the command line. Two recordings of one workflow can be compared to show
+which request values differ. The rest of the inference, and the replay and verification
+stages described above, are not implemented yet. The Roadmap and Ticket Board below track
+what is real and what is planned.
 
 ## Installation
 
@@ -148,6 +149,48 @@ feeding into something else.
 
 Credentials are redacted before any of this is printed, and query strings are left out of
 the table, so the output can go into an issue or a report as it stands.
+
+One recording says what the workflow sent. Two say which of it was the input. Record the
+same workflow again with something else filled in, and compare the two:
+
+```console
+$ trace2api diff examples/storefront-orders.har examples/storefront-orders-second-run.har
+Left:  8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Right: 7 requests from har, recorded 2026-09-04T09:41:00+00:00
+Comparing 4 kept requests on the left with 4 on the right.
+
+4 -> 3  GET shop.example.com/api/v1/orders
+  request.query[status]          changed  "open" -> "shipped"
+  request.query[page]            added    "2"
+
+6 -> 5  GET shop.example.com/api/v1/orders/4711
+  paired on the same path once identifier shaped segments are set aside
+  request.path[4]                changed  "4711" -> "5822"
+
+7 -> 6  POST shop.example.com/api/v1/orders/4711/confirm
+  paired on the same path once identifier shaped segments are set aside
+  request.path[4]                changed  "4711" -> "5822"
+  request.headers.x-csrf-token   changed  (redacted) -> (redacted)
+  request.body.payment_method    changed  "invoice" -> "card"
+  request.body.confirmation_ref  changed  "CNF-4711-88" -> "CNF-5822-40"
+  request.body.gift_wrap         added    "true"
+
+Paired 4 requests: 3 changed, 1 unchanged.
+8 values differ.
+Redacted 12 values before comparing, using one salt for both captures.
+```
+
+Requests are paired by what identifies them rather than by where they sit, so the second
+run serving a stylesheet from cache does not push everything after it out of line, and a
+path carrying an order number still pairs with its counterpart. A pairing that was not
+exact prints the rule behind it, and a request with no counterpart is reported as
+unpaired rather than compared with the nearest thing available.
+
+Both recordings are redacted first, with one salt shared between them. The access token
+was the same on both runs, so it does not appear here at all, while the CSRF token the
+server reissued is reported as changed without either value being printed. `--unchanged`
+lists the requests that held still as well, `--all` compares the noise too, and `--json`
+writes the same comparison as a document.
 
 Once the capture reads correctly, write those requests out as a client:
 
@@ -345,6 +388,14 @@ somewhere else, and running the file directly prints a line per response.
   the noise summarized rather than printed. `--all` lists the filtered requests,
   `--explain` names the rule behind each verdict, and `--json` writes the same account as
   a JSON document. Query strings are never rendered.
+- `trace2api diff LEFT RIGHT` compares two recordings of one workflow and reports which
+  request values differ: path segments, query parameters, headers, and payload fields,
+  each located where it was observed. Requests are paired by what identifies them rather
+  than by position, the rule behind a pairing that was not exact is named, and a request
+  with no counterpart is reported as unpaired rather than compared with the nearest
+  candidate. `--unchanged` lists the paired requests that held still, `--all` compares
+  the requests filtered as noise, and `--json` writes the same comparison as a JSON
+  document.
 - `trace2api generate CAPTURE` writes the requests a saved capture or a HAR archive
   holds as a runnable cURL script on standard output, numbered as `inspect` numbers them.
   Every credential becomes a reference to an environment variable named after where the
@@ -366,8 +417,10 @@ somewhere else, and running the file directly prints a line per response.
   before it sends anything. A query string that held a credential is rebuilt through
   `URLSearchParams`, and a body `fetch` refuses to send, such as one observed on a `GET`
   request, is reported rather than dropped silently.
-- A synthetic capture at `examples/storefront-orders.har` that the quick start above
-  runs against.
+- Two synthetic captures, `examples/storefront-orders.har` and
+  `examples/storefront-orders-second-run.har`, that the quick start above runs against.
+  They record the same storefront workflow with different inputs, which is what the
+  comparison needs.
 - A browser recorder that watches a live session through Playwright and records every
   http and https exchange it performs, with the response payloads of the requests the
   analysis reads, the durations the browser measured, and the requests that failed or
@@ -444,6 +497,11 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
 - A summary goes further and names no path or payload at all: only hosts, counts, and the
   rules behind them. What a recording contains can be reported where the recording itself
   cannot go.
+- Two captures being compared are redacted under one salt, so the same credential reads as
+  the same placeholder in both and reports as unchanged. A credential that was reissued
+  between the runs is reported as changed, and shown as the word `(redacted)` on each
+  side. The fingerprint behind a placeholder is never printed: it is salted per run, so it
+  would say nothing except to make the same comparison read differently every time.
 - Generated clients read secrets from environment variables rather than embedding them.
 - A capture is redacted on the way to disk, not on the way back, so the file itself holds
   no credentials. It is still written with owner only permissions, because a sanitized
@@ -537,8 +595,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-013 | Diff equivalent captures and identify changed request values. | Ready | T2A-004 |
-| T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Backlog | T2A-013 |
+| T2A-013 | Diff equivalent captures and identify changed request values. | Done | T2A-004 |
+| T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Ready | T2A-013 |
 | T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Ready | T2A-004 |
 | T2A-016 | Build and display a request dependency graph. | Backlog | T2A-015 |
 | T2A-017 | Compile a direct multi-request client from the inferred graph. | Backlog | T2A-016, T2A-014, T2A-008 |
@@ -556,7 +614,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-022 | Detect common cursor, offset, and page number pagination. | Backlog | T2A-013 |
+| T2A-022 | Detect common cursor, offset, and page number pagination. | Ready | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Ready | T2A-004 |
 | T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Backlog | T2A-015, T2A-003 |
 | T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Backlog | T2A-014 |
@@ -609,6 +667,7 @@ src/trace2api/
     inspection.py
     models.py
     analyze/
+        diff.py
         relevance.py
         summary.py
     capture/
@@ -669,6 +728,15 @@ those verdicts rather than listing them, because the first question asked of a r
 is whether it caught the workflow at all. It reads the same rules the inspection does, so
 the two accounts of one capture cannot disagree.
 
+`diff.py` is the first stage that reads more than one recording. It pairs the requests of
+two captures and reports the values that differ between each pair. Pairing is the harder
+half: recordings of one workflow do not line up by position, so entries are matched by
+what identifies them, by three rules applied most exact first, and the rule that matched
+is kept with the pair. Where two candidates would do equally well, neither is chosen, and
+both requests are reported as unpaired. A wrong pairing would invent changes that were
+never observed, and an unpaired request says plainly that nothing was concluded about it.
+What a changed value means is left to the tickets after this one.
+
 `generate/` writes an analyzed capture out as ordinary source code. Each target renders
 the same requests in a different language, and they share two rules: the capture is
 redacted before a line is written, and every secret becomes a reference to an environment
@@ -691,6 +759,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 - 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
 - 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
 - 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
