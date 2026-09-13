@@ -13,6 +13,8 @@ from trace2api.analyze import (
     DEFAULT_KEPT,
     Relevance,
     classify_capture,
+    diff_captures,
+    render_diff,
     render_summary,
     summarize_capture,
 )
@@ -230,6 +232,62 @@ def inspect(
     typer.echo(
         render_inspection(inspection, include_noise=include_noise, explain=explain), nl=False
     )
+
+
+@app.command()
+def diff(
+    left: Annotated[
+        Path,
+        typer.Argument(
+            metavar="LEFT",
+            help="Path to the first recording of the workflow.",
+            show_default=False,
+        ),
+    ],
+    right: Annotated[
+        Path,
+        typer.Argument(
+            metavar="RIGHT",
+            help="Path to a second recording of the same workflow.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Compare every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    include_unchanged: Annotated[
+        bool,
+        typer.Option(
+            "--unchanged",
+            help="List the paired requests whose values all held still as well.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the comparison as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Compare two recordings of one workflow and report which request values changed.
+
+    Requests are paired by what identifies them rather than by position, and one that has
+    no counterpart is reported as unpaired rather than compared with the nearest
+    candidate.
+
+    Both captures are redacted first, with one salt, so a credential that did not change
+    between the two runs reads as unchanged and one that did is reported without either
+    value being shown.
+    """
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    compared = diff_captures(_load_capture(left), _load_capture(right), keep=keep)
+    if as_json:
+        typer.echo(compared.as_json())
+        return
+    typer.echo(render_diff(compared, include_unchanged=include_unchanged), nl=False)
 
 
 @app.command()
