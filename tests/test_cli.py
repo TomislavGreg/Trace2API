@@ -348,6 +348,111 @@ class TestDiffCommand:
         assert "Paired 4 requests: 3 changed, 1 unchanged." in result.stdout
 
 
+class TestClassifyCommand:
+    def test_says_what_each_value_that_moved_is(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=open&limit=20"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=shipped&limit=20"),
+        )
+        result = runner.invoke(app, ["classify", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "1 -> 1  GET shop.example.com/api/v1/orders" in result.stdout
+        assert 'request.query[status]  input  "open" -> "shipped"' in result.stdout
+        assert "Classified 5 values: 1 input, 4 constants." in result.stdout
+
+    def test_a_constant_is_counted_rather_than_listed(self, tmp_path: Path) -> None:
+        archived = har_entry("https://shop.example.com/api/v1/orders?status=open")
+        first = write_har(tmp_path / "first.har", archived)
+        second = write_har(tmp_path / "second.har", archived)
+        result = runner.invoke(app, ["classify", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "request.query[status]" not in result.stdout
+        assert "Pass --constants to list them." in result.stdout
+
+    def test_constants_can_be_listed(self, tmp_path: Path) -> None:
+        archived = har_entry("https://shop.example.com/api/v1/orders?status=open")
+        first = write_har(tmp_path / "first.har", archived)
+        second = write_har(tmp_path / "second.har", archived)
+        result = runner.invoke(app, ["classify", str(first), str(second), "--constants"])
+        assert result.exit_code == 0
+        assert 'request.query[status]  constant  "open"' in result.stdout
+
+    def test_explain_names_the_rule_behind_a_verdict(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?ts=1757066100"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?ts=1757069700"),
+        )
+        result = runner.invoke(app, ["classify", str(first), str(second), "--explain"])
+        assert result.exit_code == 0
+        assert "generated" in result.stdout
+        assert "named after a value that is minted per request: ts" in result.stdout
+
+    def test_noise_is_classified_only_when_asked(self, tmp_path: Path) -> None:
+        archived = har_entry("https://cdn.example.com/img/logo.png", resource_type="image")
+        first = write_har(tmp_path / "first.har", archived)
+        second = write_har(tmp_path / "second.har", archived)
+        without = runner.invoke(app, ["classify", str(first), str(second)])
+        assert "Classifying the values of 0 paired requests." in without.stdout
+        with_noise = runner.invoke(app, ["classify", str(first), str(second), "--all"])
+        assert "Classifying the values of 1 paired request." in with_noise.stdout
+
+    def test_json_reports_the_same_verdicts(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=open"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=shipped"),
+        )
+        result = runner.invoke(app, ["classify", str(first), str(second), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        values = {item["location"]: item for item in payload["requests"][0]["values"]}
+        assert values["request.query[status]"]["role"] == "input"
+        assert values["request.path[1]"]["role"] == "constant"
+
+    def test_credentials_are_redacted_before_anything_is_classified(self, tmp_path: Path) -> None:
+        authorized = har_entry(
+            "https://shop.example.com/api/v1/orders",
+            headers=[{"name": "Authorization", "value": "Bearer s3cr3t-token-value"}],
+        )
+        first = write_har(tmp_path / "first.har", authorized)
+        second = write_har(tmp_path / "second.har", authorized)
+        result = runner.invoke(app, ["classify", str(first), str(second), "--constants"])
+        assert result.exit_code == 0
+        assert "s3cr3t-token-value" not in result.stdout
+        assert "request.headers.authorization  secret" in result.stdout
+        assert "Redacted 2 values before classifying" in result.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        result = runner.invoke(app, ["classify", str(archive), str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+
+    def test_two_captures_are_required(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        assert runner.invoke(app, ["classify", str(archive)]).exit_code != 0
+
+    def test_the_shipped_examples_classify(self) -> None:
+        result = runner.invoke(app, ["classify", str(EXAMPLE_HAR), str(SECOND_RUN_HAR)])
+        assert result.exit_code == 0
+        assert "Classified 30 values: 7 inputs, 5 secrets, 18 constants." in result.stdout
+
+
 class TestGenerateCommand:
     def test_writes_a_curl_script_for_the_application_requests(self, tmp_path: Path) -> None:
         archive = write_har(
