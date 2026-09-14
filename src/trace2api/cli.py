@@ -13,7 +13,9 @@ from trace2api.analyze import (
     DEFAULT_KEPT,
     Relevance,
     classify_capture,
+    classify_values,
     diff_captures,
+    render_classification,
     render_diff,
     render_summary,
     summarize_capture,
@@ -288,6 +290,69 @@ def diff(
         typer.echo(compared.as_json())
         return
     typer.echo(render_diff(compared, include_unchanged=include_unchanged), nl=False)
+
+
+@app.command()
+def classify(
+    left: Annotated[
+        Path,
+        typer.Argument(
+            metavar="LEFT",
+            help="Path to the first recording of the workflow.",
+            show_default=False,
+        ),
+    ],
+    right: Annotated[
+        Path,
+        typer.Argument(
+            metavar="RIGHT",
+            help="Path to a second recording of the same workflow.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Classify every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    include_constants: Annotated[
+        bool,
+        typer.Option(
+            "--constants",
+            help="List the values that held still as well. The JSON report always includes them.",
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each verdict."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the classification as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Say what each value of a workflow is, given two recordings of it.
+
+    A value that held still is a constant. One that differs is read as an input, as
+    something generated per request, or as unknown, and a value redaction removed is
+    reported as a secret a client supplies from the environment.
+
+    Every verdict names the rule behind it, and a rule that matched on a name reports the
+    name rather than the value. Nothing is guessed: a value no rule recognizes is reported
+    as unknown.
+    """
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    classified = classify_values(_load_capture(left), _load_capture(right), keep=keep)
+    if as_json:
+        typer.echo(classified.as_json())
+        return
+    typer.echo(
+        render_classification(classified, include_constants=include_constants, explain=explain),
+        nl=False,
+    )
 
 
 @app.command()
