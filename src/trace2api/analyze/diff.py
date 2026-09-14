@@ -48,14 +48,21 @@ from trace2api.sanitize import is_redacted, redact_capture, split_secrets
 __all__ = [
     "REDACTED_DISPLAY",
     "VALUE_DISPLAY_WIDTH",
+    "AlignedCaptures",
+    "AlignedRequest",
     "AlignmentRule",
     "CaptureDiff",
     "ChangeKind",
     "ComparedCapture",
+    "ComparedValue",
     "PairedRequest",
     "UnpairedRequest",
     "ValueChange",
+    "align_captures",
+    "alignment_reason",
+    "compare_requests",
     "diff_captures",
+    "display_value",
     "render_diff",
 ]
 
@@ -80,6 +87,11 @@ _ALIGNMENT_REASONS: dict[AlignmentRule, str] = {
 }
 
 
+def alignment_reason(rule: AlignmentRule) -> str:
+    """Return why ``rule`` takes two entries to be the same request of one workflow."""
+    return _ALIGNMENT_REASONS[rule]
+
+
 class ChangeKind(StrEnum):
     """What happened to one value between the two recordings."""
 
@@ -89,6 +101,28 @@ class ChangeKind(StrEnum):
 
     REMOVED = "removed"
     """Present in the first recording only."""
+
+
+class ComparedValue(NamedTuple):
+    """One request value as each recording sent it, located where it was observed.
+
+    A side is ``None`` where that recording did not send the value at all, which is how a
+    field one run added or dropped is told apart from one it sent empty.
+    """
+
+    location: str
+    left: str | None
+    right: str | None
+
+    @property
+    def is_changed(self) -> bool:
+        """Return whether the two recordings sent different values."""
+        return self.left != self.right
+
+    @property
+    def observed(self) -> tuple[str, ...]:
+        """Return the values that were actually sent, one side or both."""
+        return tuple(value for value in (self.left, self.right) if value is not None)
 
 
 class ValueChange(BaseModel):
@@ -138,7 +172,7 @@ class PairedRequest(BaseModel):
     @property
     def reason(self) -> str:
         """Return why the two entries were taken to be the same request."""
-        return _ALIGNMENT_REASONS[self.rule]
+        return alignment_reason(self.rule)
 
 
 class UnpairedRequest(BaseModel):
@@ -192,6 +226,68 @@ class CaptureDiff(BaseModel):
         return json.dumps(self.model_dump(mode="json"), indent=2)
 
 
+class AlignedRequest(NamedTuple):
+    """One request recognized in both recordings, as each of them sent it."""
+
+    rule: AlignmentRule
+    left_position: int
+    right_position: int
+    left: Request
+    right: Request
+
+
+class AlignedCaptures(NamedTuple):
+    """Two redacted recordings and the requests recognized on both sides.
+
+    This is what every stage that reads two recordings of one workflow starts from. The
+    comparison in this module is one such stage, and classifying what the values mean is
+    another, so the redaction, the relevance filtering, and the pairing happen once and in
+    one place rather than once per stage.
+    """
+
+    left: ComparedCapture
+    right: ComparedCapture
+    requests: list[AlignedRequest]
+    unpaired_left: list[UnpairedRequest]
+    unpaired_right: list[UnpairedRequest]
+    redacted_values: int
+
+
+def align_captures(
+    left: Capture,
+    right: Capture,
+    *,
+    keep: Iterable[Relevance] = DEFAULT_KEPT,
+    salt: bytes | None = None,
+) -> AlignedCaptures:
+    """Redact ``left`` and ``right``, then pair the requests they have in common.
+
+    Only the entries whose relevance is in ``keep`` take part, so a comparison is not
+    drowned by the beacons and bundle fetches that differ between any two page loads.
+    Positions are still counted over the whole capture, so they match what ``inspect``
+    prints.
+
+    A ``salt`` may be supplied to make the redaction reproducible. Whether it is or not,
+    one salt is used for both captures: reading values redacted under two different salts
+    would report every credential as changed.
+    """
+    shared_salt = salt if salt is not None else secrets.token_bytes(32)
+    sanitized_left = redact_capture(left, salt=shared_salt)
+    sanitized_right = redact_capture(right, salt=shared_salt)
+    kept = frozenset(keep)
+    selected_left = _select(sanitized_left.capture, kept)
+    selected_right = _select(sanitized_right.capture, kept)
+    paired, unpaired_left, unpaired_right = _align(selected_left, selected_right)
+    return AlignedCaptures(
+        left=_compared(sanitized_left.capture, len(selected_left)),
+        right=_compared(sanitized_right.capture, len(selected_right)),
+        requests=[_aligned(pairing) for pairing in paired],
+        unpaired_left=[_unpaired(item) for item in unpaired_left],
+        unpaired_right=[_unpaired(item) for item in unpaired_right],
+        redacted_values=len(sanitized_left.report) + len(sanitized_right.report),
+    )
+
+
 def diff_captures(
     left: Capture,
     right: Capture,
@@ -201,29 +297,17 @@ def diff_captures(
 ) -> CaptureDiff:
     """Compare ``left`` and ``right`` as two recordings of the same workflow.
 
-    Only the entries whose relevance is in ``keep`` take part, so a comparison is not
-    drowned by the beacons and bundle fetches that differ between any two page loads.
-    Positions are still counted over the whole capture, so they match what ``inspect``
-    prints.
-
-    A ``salt`` may be supplied to make the redaction reproducible. Whether it is or not,
-    one salt is used for both captures: comparing values redacted under two different
-    salts would report every credential as changed.
+    ``keep`` and ``salt`` mean what they mean for :func:`align_captures`, which is where
+    the two recordings are redacted and their requests paired.
     """
-    shared_salt = salt if salt is not None else secrets.token_bytes(32)
-    sanitized_left = redact_capture(left, salt=shared_salt)
-    sanitized_right = redact_capture(right, salt=shared_salt)
-    kept = frozenset(keep)
-    selected_left = _select(sanitized_left.capture, kept)
-    selected_right = _select(sanitized_right.capture, kept)
-    paired, unpaired_left, unpaired_right = _align(selected_left, selected_right)
+    aligned = align_captures(left, right, keep=keep, salt=salt)
     return CaptureDiff(
-        left=_compared(sanitized_left.capture, len(selected_left)),
-        right=_compared(sanitized_right.capture, len(selected_right)),
-        pairs=[_pair(pairing) for pairing in paired],
-        unpaired_left=[_unpaired(item) for item in unpaired_left],
-        unpaired_right=[_unpaired(item) for item in unpaired_right],
-        redacted_values=len(sanitized_left.report) + len(sanitized_right.report),
+        left=aligned.left,
+        right=aligned.right,
+        pairs=[_pair(request) for request in aligned.requests],
+        unpaired_left=aligned.unpaired_left,
+        unpaired_right=aligned.unpaired_right,
+        redacted_values=aligned.redacted_values,
     )
 
 
@@ -272,17 +356,31 @@ def _unpaired(item: _Positioned) -> UnpairedRequest:
     )
 
 
-def _pair(pairing: _Pairing) -> PairedRequest:
-    """Describe one request recognized in both recordings."""
-    left = pairing.left.entry.request
-    return PairedRequest(
+def _aligned(pairing: _Pairing) -> AlignedRequest:
+    """Describe one request recognized in both recordings, keeping both sides of it."""
+    return AlignedRequest(
+        rule=pairing.rule,
         left_position=pairing.left.position,
         right_position=pairing.right.position,
-        method=left.method,
-        host=left.host,
-        path=left.path,
-        rule=pairing.rule,
-        changes=_request_changes(left, pairing.right.entry.request),
+        left=pairing.left.entry.request,
+        right=pairing.right.entry.request,
+    )
+
+
+def _pair(request: AlignedRequest) -> PairedRequest:
+    """Describe one paired request by the values that differ between the two recordings."""
+    return PairedRequest(
+        left_position=request.left_position,
+        right_position=request.right_position,
+        method=request.left.method,
+        host=request.left.host,
+        path=request.left.path,
+        rule=request.rule,
+        changes=[
+            _as_change(value)
+            for value in compare_requests(request.left, request.right)
+            if value.is_changed
+        ],
     )
 
 
@@ -409,25 +507,39 @@ def _segments(path: str) -> list[str]:
 # Comparing
 
 
-def _request_changes(left: Request, right: Request) -> list[ValueChange]:
-    """Return every value that differs between two requests, in the order they are read."""
-    changes = _path_changes(left, right)
-    changes.extend(_named_changes(_by_name(left.query), _by_name(right.query), "request.query"))
-    changes.extend(_header_changes(left, right))
-    changes.extend(_body_changes(left.body, right.body))
-    return changes
+def compare_requests(left: Request, right: Request) -> list[ComparedValue]:
+    """Return every value the two requests carry, side by side, in the order they are read.
+
+    Values that held still are reported alongside the ones that differ. A comparison shows
+    only the differences, but a stage that has to say what a value *is* needs both: a value
+    that was identical on two runs is evidence in its own right.
+    """
+    values = _path_values(left, right)
+    values.extend(_named_values(_by_name(left.query), _by_name(right.query), "request.query"))
+    values.extend(_header_values(left, right))
+    values.extend(_body_values(left.body, right.body))
+    return values
 
 
-def _path_changes(left: Request, right: Request) -> list[ValueChange]:
-    """Return the path segments that differ, numbered from one as a reader counts them."""
+def _as_change(value: ComparedValue) -> ValueChange:
+    """Return what happened to one value that differs between the two recordings."""
+    if value.left is None:
+        return _added(value.location, value.right or "")
+    if value.right is None:
+        return _removed(value.location, value.left)
+    return ValueChange(
+        location=value.location, kind=ChangeKind.CHANGED, left=value.left, right=value.right
+    )
+
+
+def _path_values(left: Request, right: Request) -> list[ComparedValue]:
+    """Return the path segments of both requests, numbered from one as a reader counts them."""
     left_segments = _segments(left.path)
     right_segments = _segments(right.path)
     if len(left_segments) != len(right_segments):
-        whole = _change("request.path", left.path, right.path)
-        return [whole] if whole is not None else []
+        return [ComparedValue("request.path", left.path, right.path)]
     numbered = enumerate(zip(left_segments, right_segments, strict=True), start=1)
-    changes = (_change(f"request.path[{position}]", *values) for position, values in numbered)
-    return [change for change in changes if change is not None]
+    return [ComparedValue(f"request.path[{position}]", *values) for position, values in numbered]
 
 
 def _by_name(params: QueryParams) -> dict[str, tuple[str, ...]]:
@@ -443,11 +555,11 @@ second time in bytes, which is why it is left out here.
 """
 
 
-def _header_changes(left: Request, right: Request) -> list[ValueChange]:
-    """Return the request headers that differ, located by their lowercased names."""
+def _header_values(left: Request, right: Request) -> list[ComparedValue]:
+    """Return the request headers of both sides, located by their lowercased names."""
     left_headers = _headers_by_name(left)
     right_headers = _headers_by_name(right)
-    return _named_changes(left_headers, right_headers, "request.headers", bracketed=False)
+    return _named_values(left_headers, right_headers, "request.headers", bracketed=False)
 
 
 def _headers_by_name(request: Request) -> dict[str, tuple[str, ...]]:
@@ -460,15 +572,15 @@ def _headers_by_name(request: Request) -> dict[str, tuple[str, ...]]:
     return {name: request.headers.get_all(name) for name in names}
 
 
-def _named_changes(
+def _named_values(
     left: dict[str, tuple[str, ...]],
     right: dict[str, tuple[str, ...]],
     location: str,
     *,
     bracketed: bool = True,
-) -> list[ValueChange]:
-    """Compare two sets of named values, matching repeats by the order they were observed."""
-    changes: list[ValueChange] = []
+) -> list[ComparedValue]:
+    """Read two sets of named values, matching repeats by the order they were observed."""
+    values: list[ComparedValue] = []
     names = list(left) + [name for name in right if name not in left]
     for name in names:
         left_values = left.get(name, ())
@@ -476,45 +588,45 @@ def _named_changes(
         where = f"{location}[{name}]" if bracketed else f"{location}.{name}"
         repeated = max(len(left_values), len(right_values)) > 1
         for index in range(max(len(left_values), len(right_values))):
-            change = _change(
-                f"{where}[{index}]" if repeated else where,
-                left_values[index] if index < len(left_values) else None,
-                right_values[index] if index < len(right_values) else None,
+            values.append(
+                ComparedValue(
+                    f"{where}[{index}]" if repeated else where,
+                    left_values[index] if index < len(left_values) else None,
+                    right_values[index] if index < len(right_values) else None,
+                )
             )
-            if change is not None:
-                changes.append(change)
-    return changes
+    return values
 
 
 _FORM_MEDIA_TYPE = "application/x-www-form-urlencoded"
 _BODY_LOCATION = "request.body"
 
 
-def _body_changes(left: Body | None, right: Body | None) -> list[ValueChange]:
-    """Return the payload values that differ, field by field where the payload is a structure.
+def _body_values(left: Body | None, right: Body | None) -> list[ComparedValue]:
+    """Return the payload values of both sides, field by field where the payload is a structure.
 
-    A payload neither side can be read as a structure is compared whole, because the way
-    to describe a difference inside an opaque body is to show both of them.
+    A payload neither side can be read as a structure is read whole, because the way to
+    describe a difference inside an opaque body is to show both of them.
     """
     left = _payload(left)
     right = _payload(right)
     if left is None and right is None:
         return []
     if left is None or right is None:
-        change = _change(
-            _BODY_LOCATION,
-            _body_value(left) if left is not None else None,
-            _body_value(right) if right is not None else None,
-        )
-        return [change] if change is not None else []
+        return [
+            ComparedValue(
+                _BODY_LOCATION,
+                _body_value(left) if left is not None else None,
+                _body_value(right) if right is not None else None,
+            )
+        ]
     if left.is_json and right.is_json:
         documents = _both_parsed(left, right)
         if documents is not None:
-            return _json_changes(documents[0], documents[1], _BODY_LOCATION)
+            return _json_values(documents[0], documents[1], _BODY_LOCATION)
     if left.media_type == _FORM_MEDIA_TYPE and right.media_type == _FORM_MEDIA_TYPE:
-        return _named_changes(_form_fields(left), _form_fields(right), _BODY_LOCATION)
-    change = _change(_BODY_LOCATION, _body_value(left), _body_value(right))
-    return [change] if change is not None else []
+        return _named_values(_form_fields(left), _form_fields(right), _BODY_LOCATION)
+    return [ComparedValue(_BODY_LOCATION, _body_value(left), _body_value(right))]
 
 
 def _payload(body: Body | None) -> Body | None:
@@ -549,53 +661,41 @@ def _form_fields(body: Body) -> dict[str, tuple[str, ...]]:
     return {name: tuple(values) for name, values in fields.items()}
 
 
-def _json_changes(left: Any, right: Any, location: str) -> list[ValueChange]:
-    """Compare two parsed payloads leaf by leaf, keeping the path to each one.
+def _json_values(left: Any, right: Any, location: str) -> list[ComparedValue]:
+    """Read two parsed payloads leaf by leaf, keeping the path to each one.
 
-    A leaf is compared as the text it was sent as, so a field that carried the number
-    ``1`` on one run and the string ``"1"`` on the other reads as one value. Reporting a
-    change there would mean printing the same characters on both sides of an arrow.
+    A leaf is read as the text it was sent as, so a field that carried the number ``1`` on
+    one run and the string ``"1"`` on the other reads as one value. Reporting a change
+    there would mean printing the same characters on both sides of an arrow.
     """
     if isinstance(left, dict) and isinstance(right, dict):
-        changes: list[ValueChange] = []
+        values: list[ComparedValue] = []
         for key in list(left) + [key for key in right if key not in left]:
             where = f"{location}.{key}"
             if key not in right:
-                changes.append(_removed(where, _json_text(left[key])))
+                values.append(ComparedValue(where, _json_text(left[key]), None))
             elif key not in left:
-                changes.append(_added(where, _json_text(right[key])))
+                values.append(ComparedValue(where, None, _json_text(right[key])))
             else:
-                changes.extend(_json_changes(left[key], right[key], where))
-        return changes
+                values.extend(_json_values(left[key], right[key], where))
+        return values
     if isinstance(left, list) and isinstance(right, list):
-        changes = []
+        values = []
         for index in range(max(len(left), len(right))):
             where = f"{location}[{index}]"
             if index >= len(right):
-                changes.append(_removed(where, _json_text(left[index])))
+                values.append(ComparedValue(where, _json_text(left[index]), None))
             elif index >= len(left):
-                changes.append(_added(where, _json_text(right[index])))
+                values.append(ComparedValue(where, None, _json_text(right[index])))
             else:
-                changes.extend(_json_changes(left[index], right[index], where))
-        return changes
-    change = _change(location, _json_text(left), _json_text(right))
-    return [change] if change is not None else []
+                values.extend(_json_values(left[index], right[index], where))
+        return values
+    return [ComparedValue(location, _json_text(left), _json_text(right))]
 
 
 def _json_text(value: Any) -> str:
     """Return a JSON value as the text a comparison shows for it."""
     return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
-
-
-def _change(location: str, left: str | None, right: str | None) -> ValueChange | None:
-    """Return what happened to one value, or ``None`` when it did not change."""
-    if left == right:
-        return None
-    if left is None:
-        return _added(location, right or "")
-    if right is None:
-        return _removed(location, left)
-    return ValueChange(location=location, kind=ChangeKind.CHANGED, left=left, right=right)
 
 
 def _added(location: str, value: str) -> ValueChange:
@@ -677,11 +777,11 @@ def _location_width(pairs: Iterable[PairedRequest]) -> int:
 def _sides(change: ValueChange) -> str:
     """Return what a change shows of the values themselves."""
     if change.kind is ChangeKind.CHANGED:
-        return f"{_display(change.left or '')} -> {_display(change.right or '')}"
-    return _display((change.right if change.kind is ChangeKind.ADDED else change.left) or "")
+        return f"{display_value(change.left or '')} -> {display_value(change.right or '')}"
+    return display_value((change.right if change.kind is ChangeKind.ADDED else change.left) or "")
 
 
-def _display(value: str) -> str:
+def display_value(value: str) -> str:
     """Return ``value`` as it is shown: quoted, shortened, and never a credential.
 
     A placeholder becomes the word ``(redacted)`` rather than the fingerprint it carries.
