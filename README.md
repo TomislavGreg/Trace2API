@@ -32,9 +32,10 @@ Early development. A live browser session can be recorded to a local capture, an
 capture, recorded or imported from a HAR archive, can be summarized, inspected, and
 written out as a runnable cURL script, Python `httpx` module, or JavaScript `fetch`
 module from the command line. Two recordings of one workflow can be compared to show
-which request values differ. The rest of the inference, and the replay and verification
-stages described above, are not implemented yet. The Roadmap and Ticket Board below track
-what is real and what is planned.
+which request values differ, and those values can be classified as inputs, constants,
+generated values, secrets, or unknowns. The dependencies between requests, and the replay
+and verification stages described above, are not implemented yet. The Roadmap and Ticket
+Board below track what is real and what is planned.
 
 ## Installation
 
@@ -76,9 +77,9 @@ written so that only its owner can read it back. The session runs in a throwaway
 profile, so it starts signed out and leaves no cookie jar, history, or cache behind.
 Recording needs a browser, which the `[browser]` extra above installs.
 
-`summary`, `inspect`, and `generate` read that file, and they read a HAR archive exported
-from the devtools network panel just as well. The rest of this quick start uses the
-synthetic archive in this repository, so every line below can be reproduced from a clone.
+Every command below reads that file, and reads a HAR archive exported from the devtools
+network panel just as well. The rest of this quick start uses the synthetic archives in
+this repository, so every line below can be reproduced from a clone.
 
 Count what a capture holds before reading it:
 
@@ -191,6 +192,71 @@ was the same on both runs, so it does not appear here at all, while the CSRF tok
 server reissued is reported as changed without either value being printed. `--unchanged`
 lists the requests that held still as well, `--all` compares the noise too, and `--json`
 writes the same comparison as a document.
+
+A comparison says which values moved. What a client needs is what to do with each one,
+which is what `classify` answers:
+
+```console
+$ trace2api classify examples/storefront-orders.har examples/storefront-orders-second-run.har
+Left:  8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Right: 7 requests from har, recorded 2026-09-04T09:41:00+00:00
+Classifying the values of 4 paired requests.
+
+4 -> 3  GET shop.example.com/api/v1/orders
+  request.query[status]          input   "open" -> "shipped"
+  request.query[page]            input   "2" (second recording only)
+  request.headers.authorization  secret  "Bearer (redacted)"
+  request.headers.cookie         secret  "session=(redacted); locale=(redacted)"
+
+6 -> 5  GET shop.example.com/api/v1/orders/4711
+  paired on the same path once identifier shaped segments are set aside
+  request.path[4]                input   "4711" -> "5822"
+  request.headers.authorization  secret  "Bearer (redacted)"
+
+7 -> 6  POST shop.example.com/api/v1/orders/4711/confirm
+  paired on the same path once identifier shaped segments are set aside
+  request.path[4]                input   "4711" -> "5822"
+  request.headers.authorization  secret  "Bearer (redacted)"
+  request.headers.x-csrf-token   secret  (redacted) -> (redacted)
+  request.body.payment_method    input   "invoice" -> "card"
+  request.body.confirmation_ref  input   "CNF-4711-88" -> "CNF-5822-40"
+  request.body.gift_wrap         input   "true" (second recording only)
+
+Classified 30 values: 7 inputs, 5 secrets, 18 constants.
+Listing the 12 a client has to decide about. Pass --constants to list the rest.
+Redacted 12 values before classifying, using one salt for both captures.
+```
+
+Thirty values, twelve of them worth a decision. A value that held still is a constant a
+client can send as observed, which is most of a request. One that moved is an input where
+it reads as something supplied to the workflow, a generated value where it reads as
+something a machine minted, and unknown where no rule recognizes it. A value redaction
+removed is a secret whether or not it was reissued, so a placeholder is never mistaken for
+a constant worth hardcoding.
+
+The verdicts are rules, not guesses, and `--explain` prints the rule behind each one:
+
+```console
+$ trace2api classify examples/storefront-orders.har examples/storefront-orders-second-run.har --explain | tail -12 | head -8
+  request.headers.x-csrf-token   secret  (redacted) -> (redacted)
+      redaction removed it, so a client reads it from the environment
+  request.body.payment_method    input   "invoice" -> "card"
+      it differs, and every observed value is ordinary text
+  request.body.confirmation_ref  input   "CNF-4711-88" -> "CNF-5822-40"
+      it differs, and every observed value is ordinary text
+  request.body.gift_wrap         input   "true" (second recording only)
+      it differs, and every observed value is ordinary text
+```
+
+A value is generated where its name says it is minted, such as `nonce`, `ts`, or
+`X-Request-Id`, where every observed value is a UUID, a clock reading, or a long opaque
+run, or where it is a header the browser maintains from the page it was on. Those rules
+are deliberately narrow: a name such as `date` or `id` names a value a workflow is as
+likely to be given as to mint, and telling a client to invent one the operator meant to
+choose is worse than reporting it as unknown.
+
+`--constants` lists the values that held still as well, `--all` classifies the noise too,
+and `--json` writes the same verdicts as a document, constants included.
 
 Once the capture reads correctly, write those requests out as a client:
 
@@ -396,6 +462,13 @@ somewhere else, and running the file directly prints a line per response.
   candidate. `--unchanged` lists the paired requests that held still, `--all` compares
   the requests filtered as noise, and `--json` writes the same comparison as a JSON
   document.
+- `trace2api classify LEFT RIGHT` reads every value of every paired request and says what
+  it is: a constant that held still, an input supplied to the workflow, a value generated
+  per request, a secret redaction removed, or unknown where no rule recognizes it. Every
+  verdict names the rule behind it, and a rule that matched on a name reports the name
+  rather than the value. `--constants` lists the values that held still as well,
+  `--explain` adds the rule behind each verdict, `--all` classifies the requests filtered
+  as noise, and `--json` writes the same verdicts as a JSON document.
 - `trace2api generate CAPTURE` writes the requests a saved capture or a HAR archive
   holds as a runnable cURL script on standard output, numbered as `inspect` numbers them.
   Every credential becomes a reference to an environment variable named after where the
@@ -451,6 +524,9 @@ somewhere else, and running the file directly prints a line per response.
 - Relevance filtering that separates page assets, analytics hosts, and reporting
   endpoints from likely application requests, with every verdict naming the rule behind
   it and what the rule matched. Requests no rule recognizes are kept rather than dropped.
+- Value classification over two recordings, deciding for each observed value whether it is
+  a constant, an input, a generated value, a secret, or unknown, by narrow rules that each
+  report what they matched on.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -502,6 +578,10 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   between the runs is reported as changed, and shown as the word `(redacted)` on each
   side. The fingerprint behind a placeholder is never printed: it is salted per run, so it
   would say nothing except to make the same comparison read differently every time.
+- A classification decides credentials before it decides anything else, so a value
+  redaction removed is reported as a secret rather than as a constant a client could send
+  as observed. A rule that fires on a name reports the name; no rule reports a value, and
+  a value that is shown at all goes through the same rendering a comparison uses.
 - Generated clients read secrets from environment variables rather than embedding them.
 - A capture is redacted on the way to disk, not on the way back, so the file itself holds
   no credentials. It is still written with owner only permissions, because a sanitized
@@ -596,7 +676,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-013 | Diff equivalent captures and identify changed request values. | Done | T2A-004 |
-| T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Ready | T2A-013 |
+| T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Done | T2A-013 |
 | T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Ready | T2A-004 |
 | T2A-016 | Build and display a request dependency graph. | Backlog | T2A-015 |
 | T2A-017 | Compile a direct multi-request client from the inferred graph. | Backlog | T2A-016, T2A-014, T2A-008 |
@@ -617,7 +697,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-022 | Detect common cursor, offset, and page number pagination. | Ready | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Ready | T2A-004 |
 | T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Backlog | T2A-015, T2A-003 |
-| T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Backlog | T2A-014 |
+| T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
 
 ### Phase 6: Public release quality
 
@@ -667,6 +747,7 @@ src/trace2api/
     inspection.py
     models.py
     analyze/
+        classify.py
         diff.py
         relevance.py
         summary.py
@@ -735,7 +816,16 @@ what identifies them, by three rules applied most exact first, and the rule that
 is kept with the pair. Where two candidates would do equally well, neither is chosen, and
 both requests are reported as unpaired. A wrong pairing would invent changes that were
 never observed, and an unpaired request says plainly that nothing was concluded about it.
-What a changed value means is left to the tickets after this one.
+
+`classify.py` is what a comparison is evidence for. It starts from the same pairing and
+reads every value of a paired request, the ones that held still included, and reaches one
+verdict per value: constant, input, generated, secret, or unknown. Each verdict is a rule
+that either matched or did not, recorded alongside it, and the rules are narrow on
+purpose. A value no rule recognizes stays unknown rather than being pushed into the
+nearest verdict, for the same reason an unpaired request stays unpaired: a client built on
+a guess fails in a way that is hard to see. Credentials are decided before anything else,
+because a placeholder is not a value and nothing about what a value looks like applies to
+one.
 
 `generate/` writes an analyzed capture out as ordinary source code. Each target renders
 the same requests in a different language, and they share two rules: the capture is
@@ -759,6 +849,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 - 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
 - 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
@@ -772,7 +863,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
 - 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
 - 2026-08-31 - Added the core traffic models covering requests, responses, headers, query parameters, bodies, timings, and capture metadata.
-- 2026-08-31 - Added the installable package scaffold, the `trace2api` CLI entry point, and CI running format, lint, and test checks on Python 3.12.
 
 ## License
 
