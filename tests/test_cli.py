@@ -56,6 +56,7 @@ def test_help_lists_the_commands() -> None:
     assert "summary" in output
     assert "inspect" in output
     assert "diff" in output
+    assert "flow" in output
     assert "generate" in output
 
 
@@ -451,6 +452,111 @@ class TestClassifyCommand:
         result = runner.invoke(app, ["classify", str(EXAMPLE_HAR), str(SECOND_RUN_HAR)])
         assert result.exit_code == 0
         assert "Classified 30 values: 7 inputs, 5 secrets, 18 constants." in result.stdout
+
+
+def har_exchange(url: str, *, returns: str, **request: Any) -> dict[str, Any]:
+    """Build one archived exchange whose response hands out ``returns``."""
+    archived = har_entry(url, **request)
+    archived["response"]["content"] = {
+        "size": len(returns),
+        "mimeType": "application/json",
+        "text": returns,
+    }
+    return archived
+
+
+class TestFlowCommand:
+    def test_reports_the_values_taken_from_an_earlier_response(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["flow", str(archive)])
+        assert result.exit_code == 0
+        assert "2  GET shop.example.com/api/v1/orders/order-55120" in result.stdout
+        assert 'request.path[4]  <- 1  response.body.id  "order-55120"' in result.stdout
+        assert "1 value flows from a response into a later request." in result.stdout
+
+    def test_a_capture_that_carries_nothing_forward_says_so(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        result = runner.invoke(app, ["flow", str(archive)])
+        assert result.exit_code == 0
+        assert "No value a response carried was sent by a later request." in result.stdout
+
+    def test_explain_names_the_rule_behind_a_link(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["flow", str(archive), "--explain"])
+        assert "the request sent exactly what the earlier response carried" in result.stdout
+
+    def test_noise_is_read_only_when_asked(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange(
+                "https://cdn.example.com/static/app.json",
+                returns='{"build":"order-55120"}',
+                resource_type="stylesheet",
+            ),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        without = runner.invoke(app, ["flow", str(archive)])
+        assert "No value a response carried was sent by a later request." in without.stdout
+        with_noise = runner.invoke(app, ["flow", str(archive), "--all"])
+        assert "1 value flows from a response into a later request." in with_noise.stdout
+
+    def test_json_reports_both_ends_of_a_link(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["flow", str(archive), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert payload["flows"][0]["source"]["location"] == "response.body.id"
+        assert payload["flows"][0]["target"]["location"] == "request.path[4]"
+        assert payload["flows"][0]["rule"] == "whole-value"
+
+    def test_a_credential_carried_forward_is_reported_without_its_value(
+        self, tmp_path: Path
+    ) -> None:
+        archived = har_exchange("https://shop.example.com/api/v1/session", returns="{}")
+        archived["response"]["headers"].append(
+            {"name": "Set-Cookie", "value": "session=super-secret-session-value; HttpOnly"}
+        )
+        archive = write_har(
+            tmp_path / "capture.har",
+            archived,
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Cookie", "value": "session=super-secret-session-value"}],
+            ),
+        )
+        result = runner.invoke(app, ["flow", str(archive)])
+        assert result.exit_code == 0
+        assert "super-secret" not in result.output
+        assert "request.headers.cookie  <- 1  response.headers.set-cookie[session]" in result.stdout
+        assert "(redacted)" in result.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["flow", str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["flow"]).exit_code != 0
+
+    def test_the_shipped_example_traces(self) -> None:
+        result = runner.invoke(app, ["flow", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert "3 values flow from a response into a later request." in result.stdout
+        assert "2 of 4 kept requests depend on a response above them." in result.stdout
 
 
 class TestGenerateCommand:
