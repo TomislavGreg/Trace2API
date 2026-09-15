@@ -34,6 +34,14 @@ from trace2api.analyze.diff import (
     diff_captures,
     render_diff,
 )
+from trace2api.analyze.flow import (
+    CaptureFlows,
+    FlowEndpoint,
+    FlowRule,
+    ValueFlow,
+    render_flows,
+    trace_flows,
+)
 from trace2api.analyze.relevance import (
     DEFAULT_KEPT,
     Classification,
@@ -61,6 +69,7 @@ __all__ = [
     "AlignedRequest",
     "AlignmentRule",
     "CaptureDiff",
+    "CaptureFlows",
     "CaptureSummary",
     "ChangeKind",
     "Classification",
@@ -72,11 +81,14 @@ __all__ = [
     "FilterReport",
     "FilterResult",
     "FilterRule",
+    "FlowEndpoint",
+    "FlowRule",
     "PairedRequest",
     "Relevance",
     "UnpairedRequest",
     "ValueChange",
     "ValueClassification",
+    "ValueFlow",
     "ValueRole",
     "ValueRule",
     "align_captures",
@@ -88,6 +100,8 @@ __all__ = [
     "filter_capture",
     "render_classification",
     "render_diff",
+    "render_flows",
     "render_summary",
     "summarize_capture",
+    "trace_flows",
 ]
