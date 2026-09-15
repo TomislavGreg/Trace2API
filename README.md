@@ -33,9 +33,11 @@ capture, recorded or imported from a HAR archive, can be summarized, inspected, 
 written out as a runnable cURL script, Python `httpx` module, or JavaScript `fetch`
 module from the command line. Two recordings of one workflow can be compared to show
 which request values differ, and those values can be classified as inputs, constants,
-generated values, secrets, or unknowns. The dependencies between requests, and the replay
-and verification stages described above, are not implemented yet. The Roadmap and Ticket
-Board below track what is real and what is planned.
+generated values, secrets, or unknowns. A single capture can be read for the values a
+later request took from an earlier response. The dependency graph those links form, the
+multi-request client compiled from it, and the replay and verification stages described
+above, are not implemented yet. The Roadmap and Ticket Board below track what is real and
+what is planned.
 
 ## Installation
 
@@ -258,6 +260,56 @@ choose is worse than reporting it as unknown.
 `--constants` lists the values that held still as well, `--all` classifies the noise too,
 and `--json` writes the same verdicts as a document, constants included.
 
+Some of what a workflow sends was never supplied to it at all. It came out of an earlier
+response, and a client that replays the observed value works once. `flow` reads a single
+capture and reports those links:
+
+```console
+$ trace2api flow examples/storefront-orders.har
+Capture: 8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Tracing 4 kept requests for values that came from an earlier response.
+
+6  GET shop.example.com/api/v1/orders/4711
+  request.path[4]                <- 4  response.body.orders[0].id      "4711"
+
+7  POST shop.example.com/api/v1/orders/4711/confirm
+  request.path[4]                <- 4  response.body.orders[0].id      "4711"
+  request.body.confirmation_ref  <- 6  response.body.confirmation_ref  "CNF-4711-88"
+
+3 values flow from a response into a later request.
+2 of 4 kept requests depend on a response above them.
+Redacted 6 values before tracing, using one salt for the whole capture.
+```
+
+The order number in the last two paths was read out of the list of orders, and the
+confirmation reference the final request posts was read out of the order it confirms.
+Neither is an input, and neither can be hardcoded: a client has to read them at run time,
+in that order.
+
+One recording is enough here, because a value that came out of a response is evidence on
+its own. A value some request had already sent before the response carried it is not
+reported, which is what keeps a response echoing its own query string from reading as a
+dependency. Where several responses carried the same value, the earliest is named: that is
+where the workflow learned it.
+
+Two rules draw a link, and `--explain` prints the one behind each:
+
+```console
+$ trace2api flow examples/storefront-orders.har --explain | sed -n '4,8p'
+6  GET shop.example.com/api/v1/orders/4711
+  request.path[4]                <- 4  response.body.orders[0].id      "4711"
+      the request sent exactly what the earlier response carried
+
+7  POST shop.example.com/api/v1/orders/4711/confirm
+```
+
+A request either sent exactly what the response carried, or sent it inside something
+longer: a cookie a server set and the browser sent back sits inside a `Cookie` header, and
+a token handed out at sign in sits inside an `Authorization` header. Credentials keep one
+placeholder across a capture, so those links are found and printed as `(redacted)`: the
+dependency is visible without the value being shown. `--all` reads the noise too, and
+`--json` writes the same links as a document.
+
 Once the capture reads correctly, write those requests out as a client:
 
 ```console
@@ -469,6 +521,13 @@ somewhere else, and running the file directly prints a line per response.
   rather than the value. `--constants` lists the values that held still as well,
   `--explain` adds the rule behind each verdict, `--all` classifies the requests filtered
   as noise, and `--json` writes the same verdicts as a JSON document.
+- `trace2api flow CAPTURE` reads one capture and reports the request values that came out
+  of an earlier response: an identifier that became a path segment, a cursor that became a
+  query parameter, a reference that reached a payload field, a cookie or a token sent back
+  inside a header. A value some request had already sent before the response carried it is
+  not reported, and where several responses carried it the earliest is named. `--explain`
+  adds the rule behind each link, `--all` reads the requests filtered as noise, and
+  `--json` writes the same links as a JSON document.
 - `trace2api generate CAPTURE` writes the requests a saved capture or a HAR archive
   holds as a runnable cURL script on standard output, numbered as `inspect` numbers them.
   Every credential becomes a reference to an environment variable named after where the
@@ -527,6 +586,11 @@ somewhere else, and running the file directly prints a line per response.
 - Value classification over two recordings, deciding for each observed value whether it is
   a constant, an input, a generated value, a secret, or unknown, by narrow rules that each
   report what they matched on.
+- Dependency detection over one recording, finding the values a workflow took from an
+  earlier response and sent again: JSON and form fields, response headers, the cookie in a
+  `Set-Cookie` field, and a redirect target, matched either whole or as a value standing on
+  its own inside a longer one. A value the workflow had already sent by then is not
+  reported as learned from a response.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -677,8 +741,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-013 | Diff equivalent captures and identify changed request values. | Done | T2A-004 |
 | T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Done | T2A-013 |
-| T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Ready | T2A-004 |
-| T2A-016 | Build and display a request dependency graph. | Backlog | T2A-015 |
+| T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Done | T2A-004 |
+| T2A-016 | Build and display a request dependency graph. | Ready | T2A-015 |
 | T2A-017 | Compile a direct multi-request client from the inferred graph. | Backlog | T2A-016, T2A-014, T2A-008 |
 
 ### Phase 4: Replay and verification
@@ -696,7 +760,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-022 | Detect common cursor, offset, and page number pagination. | Ready | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Ready | T2A-004 |
-| T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Backlog | T2A-015, T2A-003 |
+| T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Ready | T2A-015, T2A-003 |
 | T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
 
 ### Phase 6: Public release quality
@@ -749,6 +813,7 @@ src/trace2api/
     analyze/
         classify.py
         diff.py
+        flow.py
         relevance.py
         summary.py
     capture/
@@ -827,6 +892,15 @@ a guess fails in a way that is hard to see. Credentials are decided before anyth
 because a placeholder is not a value and nothing about what a value looks like applies to
 one.
 
+`flow.py` asks a different question of the same capture, and needs only one recording to
+ask it: which values did the workflow never have until a response handed them over? It
+reads what each response carried and what each later request sent, and links the two where
+the value matches whole or stands on its own inside something longer. The guard against
+reading coincidence as dependency is evidence rather than a threshold: a value some
+request had already sent by the time the response carried it was never learned there, so
+it is not a source at all. That is what keeps a response echoing its own query string, or
+declaring the media type the request asked for, out of the links.
+
 `generate/` writes an analyzed capture out as ordinary source code. Each target renders
 the same requests in a different language, and they share two rules: the capture is
 redacted before a line is written, and every secret becomes a reference to an environment
@@ -849,6 +923,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 - 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
@@ -862,7 +937,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
 - 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
-- 2026-08-31 - Added the core traffic models covering requests, responses, headers, query parameters, bodies, timings, and capture metadata.
 
 ## License
 

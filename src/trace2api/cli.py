@@ -17,8 +17,10 @@ from trace2api.analyze import (
     diff_captures,
     render_classification,
     render_diff,
+    render_flows,
     render_summary,
     summarize_capture,
+    trace_flows,
 )
 from trace2api.capture import (
     BrowserCaptureError,
@@ -353,6 +355,53 @@ def classify(
         render_classification(classified, include_constants=include_constants, explain=explain),
         nl=False,
     )
+
+
+@app.command()
+def flow(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Read every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each link."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the links as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Show which request values a capture took from an earlier response.
+
+    An identifier handed out by one response and sent in the path of the next, a cursor
+    read from a page of results, a token a server set and the browser sent back: these
+    are what a direct client has to read at run time rather than replay as observed.
+
+    A value some request had already sent before the response carried it is not reported,
+    since the workflow did not learn it there. Credentials keep one placeholder across a
+    capture, so a session handed out by one response is recognized in the next request
+    and reported without the value being shown.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    traced = trace_flows(recorded, keep=keep)
+    if as_json:
+        typer.echo(traced.as_json())
+        return
+    typer.echo(render_flows(traced, explain=explain), nl=False)
 
 
 @app.command()
