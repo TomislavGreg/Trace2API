@@ -65,6 +65,7 @@ __all__ = [
     "CaptureFlows",
     "FlowEndpoint",
     "FlowRule",
+    "TracedRequest",
     "ValueFlow",
     "flow_reason",
     "render_flows",
@@ -108,6 +109,25 @@ class FlowEndpoint(BaseModel):
     """Where the value sits, spelled as redaction spells it."""
 
 
+class TracedRequest(BaseModel):
+    """One request the trace read, whether or not any value reached it or came from it.
+
+    A link names the two requests it ties together, so a request that neither took a value
+    from a response nor handed one out appears nowhere in the links. It was still read,
+    and a stage that reasons about the workflow as a whole, such as the dependency graph,
+    needs to know it was there.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    position: int = Field(ge=1)
+    """Where the exchange sits in the capture, counting from one as ``inspect`` does."""
+
+    method: str
+    host: str
+    path: str
+
+
 class ValueFlow(BaseModel):
     """One value a response carried and a later request sent."""
 
@@ -135,12 +155,17 @@ class CaptureFlows(BaseModel):
     source: CaptureSource
     created_at: datetime
     total_requests: int = Field(default=0, ge=0)
-    traced_requests: int = Field(default=0, ge=0)
-    """How many entries were read, the rest being filtered as noise."""
+    requests: list[TracedRequest] = Field(default_factory=list)
+    """The entries that were read, the rest having been filtered as noise."""
 
     flows: list[ValueFlow] = Field(default_factory=list)
     redacted_values: int = Field(default=0, ge=0)
     """How many credentials were removed from the capture before it was read."""
+
+    @property
+    def traced_requests(self) -> int:
+        """Return how many requests were read."""
+        return len(self.requests)
 
     @property
     def dependent_requests(self) -> int:
@@ -183,9 +208,19 @@ def trace_flows(
         source=sanitized.capture.metadata.source,
         created_at=sanitized.capture.metadata.created_at,
         total_requests=len(sanitized.capture),
-        traced_requests=len(traced),
+        requests=[_traced_request(item) for item in traced],
         flows=_trace(traced),
         redacted_values=len(sanitized.report),
+    )
+
+
+def _traced_request(item: _Positioned) -> TracedRequest:
+    """Record that an entry was read, and where it sat in the capture."""
+    return TracedRequest(
+        position=item.position,
+        method=item.entry.request.method,
+        host=item.entry.request.host,
+        path=item.entry.request.path,
     )
 
 
