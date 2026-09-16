@@ -584,6 +584,18 @@ class TestCaptureFlows:
         assert traced.source is CaptureSource.HAR
         assert traced.created_at == STARTED_AT
 
+    def test_every_request_read_is_reported_even_where_no_value_reached_it(self) -> None:
+        traced = flows_of(
+            entry("a", "https://shop.example.com/api/orders"),
+            entry("b", "https://shop.example.com/api/settings", method="POST"),
+        )
+        assert traced.flows == []
+        assert [(item.position, item.method, item.path) for item in traced.requests] == [
+            (1, "GET", "/api/orders"),
+            (2, "POST", "/api/settings"),
+        ]
+        assert traced.traced_requests == 2
+
 
 class TestRenderFlows:
     def test_links_are_grouped_under_the_request_that_needs_them(self) -> None:
