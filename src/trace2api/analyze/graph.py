@@ -284,14 +284,23 @@ def render_graph(graph: RequestGraph, *, explain: bool = False) -> str:
     """
     lines = _headline(graph)
     width = _width(graph)
-    for stage, nodes in enumerate(graph.stages, start=1):
+    waited_for = _by_target(graph.dependencies)
+    for nodes in graph.stages:
         lines.append("")
-        lines.append(_stage_heading(stage, len(nodes)))
+        lines.append(_stage_heading(nodes[0].stage, len(nodes)))
         for node in nodes:
-            lines.extend(_node_lines(node, graph, width, explain=explain))
+            lines.extend(_node_lines(node, waited_for, width, explain=explain))
     lines.append("")
     lines.extend(_summary(graph))
     return "\n".join(lines) + "\n"
+
+
+def _by_target(dependencies: Sequence[Dependency]) -> dict[int, list[Dependency]]:
+    """Gather the edges under the request that waits for them, earliest response first."""
+    grouped: dict[int, list[Dependency]] = {}
+    for dependency in dependencies:
+        grouped.setdefault(dependency.target, []).append(dependency)
+    return grouped
 
 
 class _Width(NamedTuple):
@@ -335,15 +344,19 @@ def _stage_heading(stage: int, requests: int) -> str:
     return f"Stage {stage}: {counted} {waits} for stage {stage - 1}"
 
 
-def _node_lines(node: GraphNode, graph: RequestGraph, width: _Width, *, explain: bool) -> list[str]:
+def _node_lines(
+    node: GraphNode,
+    waited_for: dict[int, list[Dependency]],
+    width: _Width,
+    *,
+    explain: bool,
+) -> list[str]:
     """Return the line naming one request and the lines naming what it waits for."""
     request = node.request
     lines = [
         f"  {request.position}  {request.method.ljust(width.method)}  {request.host}{request.path}"
     ]
-    for dependency in graph.dependencies:
-        if dependency.target != request.position:
-            continue
+    for dependency in waited_for.get(request.position, ()):
         for link in dependency.links:
             lines.append(
                 f"       needs {dependency.source}  "
