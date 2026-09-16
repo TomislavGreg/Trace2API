@@ -34,10 +34,10 @@ written out as a runnable cURL script, Python `httpx` module, or JavaScript `fet
 module from the command line. Two recordings of one workflow can be compared to show
 which request values differ, and those values can be classified as inputs, constants,
 generated values, secrets, or unknowns. A single capture can be read for the values a
-later request took from an earlier response. The dependency graph those links form, the
-multi-request client compiled from it, and the replay and verification stages described
-above, are not implemented yet. The Roadmap and Ticket Board below track what is real and
-what is planned.
+later request took from an earlier response, and those links can be read as a dependency
+graph showing what each request waits for. The multi-request client compiled from that
+graph, and the replay and verification stages described above, are not implemented yet.
+The Roadmap and Ticket Board below track what is real and what is planned.
 
 ## Installation
 
@@ -310,6 +310,46 @@ placeholder across a capture, so those links are found and printed as `(redacted
 dependency is visible without the value being shown. `--all` reads the noise too, and
 `--json` writes the same links as a document.
 
+Value by value is the grain to check the inference at. Request by request is the grain a
+client is written at, and that is what `graph` reports:
+
+```console
+$ trace2api graph examples/storefront-orders.har
+Capture: 8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Reading 4 kept requests as a dependency graph.
+
+Stage 1: 2 requests that need nothing earlier
+  1  GET   shop.example.com/orders
+  4  GET   shop.example.com/api/v1/orders
+
+Stage 2: 1 request that waits for stage 1
+  6  GET   shop.example.com/api/v1/orders/4711
+       needs 4  response.body.orders[0].id      ->  request.path[4]
+
+Stage 3: 1 request that waits for stage 2
+  7  POST  shop.example.com/api/v1/orders/4711/confirm
+       needs 4  response.body.orders[0].id      ->  request.path[4]
+       needs 6  response.body.confirmation_ref  ->  request.body.confirmation_ref
+
+4 kept requests: 2 waiting for an earlier response, 2 able to be sent first.
+2 responses must be read by the client: 4, 6.
+Longest chain: 4 -> 6 -> 7, 3 requests that cannot be sent at once.
+Redacted 6 values before reading this, using one salt for the whole capture.
+```
+
+Four requests, three rounds. The two in the first stage need nothing from anything above
+them, so a client may send them in either order or at the same time. The other two each
+wait for a response, and the two responses named are the ones a client has to read rather
+than discard. The longest chain is what remains once everything that could be sent at once
+has been: three round trips, whatever else the client does.
+
+Every link points backwards, because a value can only have been learned from a response
+that had already arrived, so a capture cannot produce a cycle to resolve. A link is named
+by where its value sat rather than by what the value was, so a session a server handed out
+and the next request sent back reads as `response.headers.set-cookie[session] ->
+request.headers.cookie` with nothing in between. `--explain` names the rule behind each
+link, `--all` reads the noise too, and `--json` writes the graph as a document.
+
 Once the capture reads correctly, write those requests out as a client:
 
 ```console
@@ -528,6 +568,13 @@ somewhere else, and running the file directly prints a line per response.
   not reported, and where several responses carried it the earliest is named. `--explain`
   adds the rule behind each link, `--all` reads the requests filtered as noise, and
   `--json` writes the same links as a JSON document.
+- `trace2api graph CAPTURE` reads those links request by request instead of value by
+  value: which requests need nothing earlier and can be sent at once, which ones wait for
+  a response, which responses a client has to read rather than discard, and the longest
+  chain of requests it cannot avoid sending one after another. A link is named by where
+  its value sat rather than by what the value was. `--explain` adds the rule behind each
+  link, `--all` reads the requests filtered as noise, and `--json` writes the same graph
+  as a JSON document.
 - `trace2api generate CAPTURE` writes the requests a saved capture or a HAR archive
   holds as a runnable cURL script on standard output, numbered as `inspect` numbers them.
   Every credential becomes a reference to an environment variable named after where the
@@ -591,6 +638,10 @@ somewhere else, and running the file directly prints a line per response.
   `Set-Cookie` field, and a redirect target, matched either whole or as a value standing on
   its own inside a longer one. A value the workflow had already sent by then is not
   reported as learned from a response.
+- A dependency graph over those links, placing each request in a stage after the latest
+  response it waits for, gathering the values two requests share into one edge, and
+  reporting the responses a client must read and the chain of requests it must send one
+  after another.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -742,8 +793,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-013 | Diff equivalent captures and identify changed request values. | Done | T2A-004 |
 | T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Done | T2A-013 |
 | T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Done | T2A-004 |
-| T2A-016 | Build and display a request dependency graph. | Ready | T2A-015 |
-| T2A-017 | Compile a direct multi-request client from the inferred graph. | Backlog | T2A-016, T2A-014, T2A-008 |
+| T2A-016 | Build and display a request dependency graph. | Done | T2A-015 |
+| T2A-017 | Compile a direct multi-request client from the inferred graph. | Ready | T2A-016, T2A-014, T2A-008 |
 
 ### Phase 4: Replay and verification
 
@@ -814,6 +865,7 @@ src/trace2api/
         classify.py
         diff.py
         flow.py
+        graph.py
         relevance.py
         summary.py
     capture/
@@ -901,6 +953,15 @@ request had already sent by the time the response carried it was never learned t
 it is not a source at all. That is what keeps a response echoing its own query string, or
 declaring the media type the request asked for, out of the links.
 
+`graph.py` reads those links request by request rather than value by value, which is the
+grain a client is written at. An edge is everything one request needs from one earlier
+response. Every edge points backwards through the capture, because a value can only have
+been learned from a response that had already arrived, so there is no cycle to break and
+a request can be placed in a stage by counting the responses it waits for. What comes out
+is what compiling a client needs: what can be sent at once, what has to wait, which
+responses have to be read rather than discarded, and how many round trips cannot be
+avoided.
+
 `generate/` writes an analyzed capture out as ordinary source code. Each target renders
 the same requests in a different language, and they share two rules: the capture is
 redacted before a line is written, and every secret becomes a reference to an environment
@@ -923,6 +984,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
@@ -936,7 +998,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 - 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
-- 2026-09-01 - Added credential redaction, replacing secrets in a capture with explainable placeholders and reporting what was removed without quoting it.
 
 ## License
 
