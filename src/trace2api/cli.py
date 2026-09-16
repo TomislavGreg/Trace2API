@@ -15,9 +15,11 @@ from trace2api.analyze import (
     classify_capture,
     classify_values,
     diff_captures,
+    graph_capture,
     render_classification,
     render_diff,
     render_flows,
+    render_graph,
     render_summary,
     summarize_capture,
     trace_flows,
@@ -402,6 +404,52 @@ def flow(
         typer.echo(traced.as_json())
         return
     typer.echo(render_flows(traced, explain=explain), nl=False)
+
+
+@app.command()
+def graph(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Read every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each link."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the graph as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Show the requests of a capture as a graph of what waits for what.
+
+    The same links flow reports, read request by request: which requests a client can send
+    straight away, which ones have to wait for a response, which responses it has to read
+    rather than discard, and the chain of round trips it cannot avoid.
+
+    Requests listed under one stage need nothing from each other. A link is named by
+    where its value sat rather than by what the value was, so a credential carried from
+    one request to the next reads as two places with nothing shown in between.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    graphed = graph_capture(recorded, keep=keep)
+    if as_json:
+        typer.echo(graphed.as_json())
+        return
+    typer.echo(render_graph(graphed, explain=explain), nl=False)
 
 
 @app.command()

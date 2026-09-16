@@ -57,6 +57,7 @@ def test_help_lists_the_commands() -> None:
     assert "inspect" in output
     assert "diff" in output
     assert "flow" in output
+    assert "graph" in output
     assert "generate" in output
 
 
@@ -557,6 +558,108 @@ class TestFlowCommand:
         assert result.exit_code == 0
         assert "3 values flow from a response into a later request." in result.stdout
         assert "2 of 4 kept requests depend on a response above them." in result.stdout
+
+
+class TestGraphCommand:
+    def test_lists_the_requests_by_the_stage_they_belong_to(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["graph", str(archive)])
+        assert result.exit_code == 0
+        assert "Stage 1: 1 request that needs nothing earlier" in result.stdout
+        assert "Stage 2: 1 request that waits for stage 1" in result.stdout
+        assert "needs 1  response.body.id  ->  request.path[4]" in result.stdout
+
+    def test_a_workflow_with_no_links_is_one_stage(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://shop.example.com/api/v1/settings"),
+        )
+        result = runner.invoke(app, ["graph", str(archive)])
+        assert result.exit_code == 0
+        assert "Stage 1: 2 requests that need nothing earlier" in result.stdout
+        assert "0 waiting for an earlier response, 2 able to be sent first." in result.stdout
+        assert "Longest chain" not in result.stdout
+
+    def test_explain_names_the_rule_behind_a_link(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["graph", str(archive), "--explain"])
+        assert "the request sent exactly what the earlier response carried" in result.stdout
+
+    def test_noise_is_read_only_when_asked(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange(
+                "https://cdn.example.com/static/app.json",
+                returns='{"build":"order-55120"}',
+                resource_type="stylesheet",
+            ),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        without = runner.invoke(app, ["graph", str(archive)])
+        assert "1 kept request: 0 waiting for an earlier response" in without.stdout
+        with_noise = runner.invoke(app, ["graph", str(archive), "--all"])
+        assert "2 kept requests: 1 waiting for an earlier response" in with_noise.stdout
+
+    def test_json_reports_the_nodes_and_the_edges(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_exchange("https://shop.example.com/api/v1/orders", returns='{"id":"order-55120"}'),
+            har_entry("https://shop.example.com/api/v1/orders/order-55120"),
+        )
+        result = runner.invoke(app, ["graph", str(archive), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        assert [node["stage"] for node in payload["nodes"]] == [1, 2]
+        assert payload["nodes"][1]["depends_on"] == [1]
+        assert payload["dependencies"][0]["links"][0]["target_location"] == "request.path[4]"
+
+    def test_a_credential_carried_forward_is_reported_as_two_places(self, tmp_path: Path) -> None:
+        archived = har_exchange("https://shop.example.com/api/v1/session", returns="{}")
+        archived["response"]["headers"].append(
+            {"name": "Set-Cookie", "value": "session=super-secret-session-value; HttpOnly"}
+        )
+        archive = write_har(
+            tmp_path / "capture.har",
+            archived,
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Cookie", "value": "session=super-secret-session-value"}],
+            ),
+        )
+        result = runner.invoke(app, ["graph", str(archive)])
+        assert result.exit_code == 0
+        assert "super-secret" not in result.output
+        assert "(redacted)" not in result.output
+        assert (
+            "needs 1  response.headers.set-cookie[session]  ->  request.headers.cookie"
+            in result.stdout
+        )
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["graph", str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["graph"]).exit_code != 0
+
+    def test_the_shipped_example_graphs(self) -> None:
+        result = runner.invoke(app, ["graph", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert "4 kept requests: 2 waiting for an earlier response, 2 able to be sent first."
+        assert "2 responses must be read by the client: 4, 6." in result.stdout
+        assert "Longest chain: 4 -> 6 -> 7, 3 requests that cannot be sent at once." in (
+            result.stdout
+        )
 
 
 class TestGenerateCommand:
