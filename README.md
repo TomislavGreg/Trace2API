@@ -34,10 +34,11 @@ written out as a runnable cURL script, Python `httpx` module, or JavaScript `fet
 module from the command line. Two recordings of one workflow can be compared to show
 which request values differ, and those values can be classified as inputs, constants,
 generated values, secrets, or unknowns. A single capture can be read for the values a
-later request took from an earlier response, and those links can be read as a dependency
-graph showing what each request waits for. The multi-request client compiled from that
-graph, and the replay and verification stages described above, are not implemented yet.
-The Roadmap and Ticket Board below track what is real and what is planned.
+later request took from an earlier response, those links can be read as a dependency
+graph showing what each request waits for, and a Python client can be compiled from that
+graph which reads those values back out of the responses instead of replaying them. The
+replay and verification stages described above are not implemented yet. The Roadmap and
+Ticket Board below track what is real and what is planned.
 
 ## Installation
 
@@ -526,6 +527,80 @@ Nothing is installed to run it: `fetch`, `URL`, and `URLSearchParams` are part o
 runtime. The module exports `run`, so the workflow can be imported and awaited from
 somewhere else, and running the file directly prints a line per response.
 
+Every client shown so far sends the values the recording held, order `4711` included, so
+it reproduces that one workflow and nothing else. `compile` writes the same Python module
+against the dependency graph instead, which is the difference between a client that worked
+once and a client that works:
+
+```console
+$ trace2api compile examples/storefront-orders.har > orders.py
+$ head -16 orders.py
+"""Direct client for a workflow recorded 2026-09-04T09:15:00+00:00 (source: har).
+
+Reproducing 4 of 8 captured requests.
+
+The workflow runs in 3 stages: 2 of 4 requests wait for an earlier response.
+
+2 values read from a response as the client runs, rather than replayed as observed:
+  orders_id         4  response.body.orders[0].id      sent on by 6, 7
+  confirmation_ref  6  response.body.confirmation_ref  sent on by 7
+
+Credentials were removed from the capture. Export them before running:
+  TRACE2API_AUTHORIZATION   request.headers.authorization
+  TRACE2API_COOKIE_SESSION  request.headers.cookie[session]
+  TRACE2API_COOKIE_LOCALE   request.headers.cookie[locale]
+  TRACE2API_X_CSRF_TOKEN    request.headers.x-csrf-token
+"""
+```
+
+The first two requests are written exactly as `generate` writes them, since neither waits
+for anything. The rest of the workflow is where the graph shows:
+
+```console
+$ sed -n '54,82p' orders.py
+    # response.body.orders[0].id, sent on by 6, 7
+    orders_id = response_4.json()["orders"][0]["id"]
+
+    # 6  GET https://shop.example.com/api/v1/orders/4711
+    response_6 = client.request(
+        "GET",
+        "https://shop.example.com/api/v1/orders/" + str(orders_id),
+        headers={
+            "Accept": "application/json",
+            "Authorization": "Bearer " + TRACE2API_AUTHORIZATION,
+        },
+    )
+
+    # response.body.confirmation_ref, sent on by 7
+    confirmation_ref = response_6.json()["confirmation_ref"]
+
+    # 7  POST https://shop.example.com/api/v1/orders/4711/confirm
+    # note: the payload is rebuilt around the values read above, so its spacing may differ from the capture
+    response_7 = client.request(
+        "POST",
+        "https://shop.example.com/api/v1/orders/" + str(orders_id) + "/confirm",
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + TRACE2API_AUTHORIZATION,
+            "X-CSRF-Token": TRACE2API_X_CSRF_TOKEN,
+        },
+        content='{"payment_method":"invoice","confirmation_ref":' + json.dumps(str(confirmation_ref)) + "}",
+    )
+```
+
+The identifier the recording happened to catch is gone from the code that sends the last
+two requests. Whatever order the first page of results names when the client runs is the
+order it fetches and confirms, and the confirmation reference comes from the response that
+issued it. The comment above each read names where the value sat and which requests send it
+on, so a reader can check the inference against `trace2api flow` without leaving the file.
+
+A link the client cannot resolve is replayed as observed and said so, in the docstring and
+again as a note on the call that sends it. A credential is the common case: it is supplied
+from the environment as ever, because redaction removed the value that would say where in
+the response it sat. A value sent in a payload that was not recorded as JSON is the other,
+and it keeps the value the recording held until the code is edited by hand.
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -596,6 +671,13 @@ somewhere else, and running the file directly prints a line per response.
   before it sends anything. A query string that held a credential is rebuilt through
   `URLSearchParams`, and a body `fetch` refuses to send, such as one observed on a `GET`
   request, is reported rather than dropped silently.
+- `trace2api compile CAPTURE` writes the same Python module against the dependency graph
+  rather than against the recording alone: a value a later request took from an earlier
+  response is read back out of that response as the client runs, whether it was sent in a
+  path segment, a query parameter, a header, or a JSON payload field. What it could not
+  resolve, such as a credential or a value sent in a payload that is not JSON, is replayed
+  as observed and reported with the reason, in the module docstring and as a note on the
+  call that sends it. `--all` compiles the filtered requests too.
 - Two synthetic captures, `examples/storefront-orders.har` and
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
@@ -642,6 +724,10 @@ somewhere else, and running the file directly prints a line per response.
   response it waits for, gathering the values two requests share into one edge, and
   reporting the responses a client must read and the chain of requests it must send one
   after another.
+- Link resolution over that graph, deciding for each link whether a generated client can
+  read the value back at run time and naming the reason where it cannot. The decision is
+  language independent: it reports where in the response the value sits and where in the
+  later request it goes, which is the same instruction whichever language is written.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -698,6 +784,11 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   as observed. A rule that fires on a name reports the name; no rule reports a value, and
   a value that is shown at all goes through the same rendering a comparison uses.
 - Generated clients read secrets from environment variables rather than embedding them.
+- A compiled client never reads a credential out of a response. Redaction replaced the
+  value with a placeholder, so the capture no longer says where in the response it sat,
+  and inventing a place to read it from would be a guess in the one part of a client where
+  a guess costs the most. Such a link is reported as a credential supplied from the
+  environment, which is what the client does with it.
 - A capture is redacted on the way to disk, not on the way back, so the file itself holds
   no credentials. It is still written with owner only permissions, because a sanitized
   recording still describes hosts, paths, and payloads that were not necessarily meant to
@@ -794,7 +885,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-014 | Classify changed values as likely inputs, constants, generated values, or unknowns using explainable rules. | Done | T2A-013 |
 | T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Done | T2A-004 |
 | T2A-016 | Build and display a request dependency graph. | Done | T2A-015 |
-| T2A-017 | Compile a direct multi-request client from the inferred graph. | Ready | T2A-016, T2A-014, T2A-008 |
+| T2A-017 | Compile a direct multi-request client from the inferred graph. | Done | T2A-016, T2A-014, T2A-008 |
+| T2A-032 | Resolve links into form encoded payloads when compiling a client. | Ready | T2A-017 |
 
 ### Phase 4: Replay and verification
 
@@ -874,6 +966,7 @@ src/trace2api/
         store.py
     generate/
         curl.py
+        dependencies.py
         headers.py
         javascript.py
         python.py
@@ -972,6 +1065,16 @@ language being written. `curl.py`, `python.py`, and `javascript.py` are the targ
 each states in its own terms what it cannot reproduce rather than sending something
 else.
 
+`dependencies.py` is what turns the graph into something a target can write. A link is
+two locations, and it answers one question about each pair: can a client read that value
+back when it runs? Where it can, it says where in the response the value sits and where in
+the later request it goes, in terms no language appears in, so the same answer serves every
+target. Where it cannot, it says why, and the value is replayed as observed rather than
+approximated. Both halves are reported, because a client that quietly replays a value a
+reader believed was resolved is worse than one that says which is which. `python.py` is the
+first target to use it: a replayed client reproduces the recording, and a compiled one
+reads what the workflow depends on.
+
 `inspection.py` turns a capture into what a command prints: it redacts first, then
 classifies, then renders. Keeping that order in one place means no command can display a
 capture that has not been through redaction.
@@ -984,6 +1087,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
@@ -997,7 +1101,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 - 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
-- 2026-09-02 - Added HAR 1.2 import, reading an archived workflow into the capture models and reporting where an archive is malformed.
 
 ## License
 
