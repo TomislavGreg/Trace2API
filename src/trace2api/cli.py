@@ -33,7 +33,12 @@ from trace2api.capture import (
     record_session,
     save_capture,
 )
-from trace2api.generate import generate_curl, generate_javascript, generate_python
+from trace2api.generate import (
+    compile_python,
+    generate_curl,
+    generate_javascript,
+    generate_python,
+)
 from trace2api.inspection import inspect_capture, render_inspection
 from trace2api.models import Capture
 
@@ -497,6 +502,41 @@ def generate(
     else:
         code = generate_javascript(recorded, keep=keep).code
     typer.echo(code, nl=False)
+
+
+@app.command("compile")
+def compile_client(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Compile every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+) -> None:
+    """Write a capture as a Python client that reads what the workflow depends on.
+
+    Where generate replays every value exactly as it was recorded, compile resolves the
+    links the trace found: an identifier a response handed out is read back out of that
+    response when the client runs, so the client works against whatever the server answers
+    with rather than only against the recording.
+
+    A link that cannot be resolved is replayed as observed and named in the module
+    docstring with the reason, so what the client reproduces and what it repeats are both
+    readable in the output. Credentials are supplied from the environment as ever.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    typer.echo(compile_python(recorded, keep=keep).code, nl=False)
 
 
 def _load_capture(path: Path) -> Capture:

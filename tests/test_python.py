@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ import pytest
 
 from trace2api.analyze import Relevance
 from trace2api.capture import load_har
-from trace2api.generate import HeaderRule, generate_python
+from trace2api.generate import HeaderRule, compile_python, generate_python
 from trace2api.models import (
     Body,
     Capture,
@@ -95,6 +96,29 @@ def send(code: str, environment: dict[str, str] | None = None) -> list[httpx.Req
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         responses = namespace["run"](client)
     assert len(responses) == len(sent)
+    return sent
+
+
+def answer(
+    code: str,
+    answers: dict[str, Any],
+    environment: dict[str, str] | None = None,
+) -> list[httpx.Request]:
+    """Run generated code against a server answering ``answers`` by path.
+
+    A compiled client reads what it sends next out of what came back, so the answers are
+    deliberately not the ones the capture recorded: a client that replayed the observed
+    values would send the wrong requests and the test would say so.
+    """
+    namespace = load_module(code, environment or {})
+    sent: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=answers.get(request.url.path, {}))
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        namespace["run"](client)
     return sent
 
 
@@ -517,3 +541,213 @@ def test_the_example_capture_produces_a_client_that_sends_the_observed_requests(
         ("POST", "https://shop.example.com/api/v1/orders/4711/confirm"),
     ]
     assert sent[1].headers["authorization"] == "Bearer supplied"
+
+
+# Compiled clients, which read what the workflow depends on
+
+
+def answering(entry_id: str, url: str, payload: str, **arguments: Any) -> Entry:
+    """Build an exchange whose response hands out a JSON payload."""
+    built = entry(entry_id, url, **arguments)
+    return built.model_copy(
+        update={
+            "response": built.response.model_copy(
+                update={"body": Body(mime_type="application/json", text=payload)}
+            )
+        }
+    )
+
+
+def test_the_docstring_reports_the_workflow_and_what_the_client_reads() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/orders", '{"orders":[{"id":"4711998"}]}'),
+            entry("b", "https://shop.example.com/api/orders/4711998"),
+        )
+    )
+    assert "The workflow runs in 2 stages: 1 of 2 requests waits for an earlier response." in (
+        client.code
+    )
+    assert "1 value read from a response as the client runs" in client.code
+    assert "orders_id  1  response.body.orders[0].id  sent on by 2" in client.code
+
+
+def test_a_capture_with_nothing_to_read_says_so() -> None:
+    client = compile_python(
+        capture(
+            entry("a", "https://shop.example.com/api/orders"),
+            entry("b", "https://shop.example.com/api/customers"),
+        )
+    )
+    assert "No value a request sent came from an earlier response." in client.code
+    assert client.dependencies.is_empty
+    assert client.graph is not None
+
+
+def test_an_identifier_is_read_from_the_response_rather_than_replayed() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/orders", '{"orders":[{"id":"4711998"}]}'),
+            entry("b", "https://shop.example.com/api/orders/4711998/items"),
+        )
+    )
+    assert 'orders_id = response_1.json()["orders"][0]["id"]' in client.code
+    sent = answer(client.code, {"/api/orders": {"orders": [{"id": "8899001"}]}})
+    assert [str(request.url) for request in sent] == [
+        "https://shop.example.com/api/orders",
+        "https://shop.example.com/api/orders/8899001/items",
+    ]
+
+
+def test_a_value_read_into_a_query_string_is_encoded_by_httpx() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"cursor":"c-9981723"}'),
+            entry("b", "https://shop.example.com/api/page?cursor=c-9981723&limit=20"),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"cursor": "a b&c"}})
+    assert str(sent[1].url) == "https://shop.example.com/api/page?cursor=a+b%26c&limit=20"
+
+
+def test_a_value_read_into_a_header_keeps_the_text_around_it() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"trace":"tr-9981723"}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/next",
+                headers=[("X-Trace", "span tr-9981723 end")],
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"trace": "tr-0000001"}})
+    assert sent[1].headers["x-trace"] == "span tr-0000001 end"
+
+
+def test_a_value_read_into_a_payload_leaves_the_other_fields_alone() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("Content-Type", "application/json")],
+                body=Body(
+                    mime_type="application/json",
+                    text='{"method":"invoice","ref":"CNF-998172","note":"see CNF-998172"}',
+                ),
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"ref": 'CNF-"01"'}})
+    assert json.loads(sent[1].content) == {
+        "method": "invoice",
+        "ref": 'CNF-"01"',
+        "note": 'see CNF-"01"',
+    }
+
+
+def test_a_payload_field_that_held_a_number_keeps_holding_one() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"id":4711998}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("Content-Type", "application/json")],
+                body=Body(mime_type="application/json", text='{"order":4711998}'),
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"id": 8899001}})
+    assert json.loads(sent[1].content) == {"order": 8899001}
+
+
+def test_a_credential_carried_between_requests_stays_an_environment_variable() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/login", f'{{"token":"{ACCESS_TOKEN}"}}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/orders",
+                headers=[("Authorization", f"Bearer {ACCESS_TOKEN}")],
+            ),
+        )
+    )
+    assert ACCESS_TOKEN not in client.code
+    assert "TRACE2API_AUTHORIZATION = os.environ" in client.code
+    assert "1 value the workflow took from a response is replayed as observed:" in client.code
+    assert "the value is a credential the client is given from the environment" in client.code
+    sent = answer(client.code, {}, {"TRACE2API_AUTHORIZATION": "supplied"})
+    assert sent[1].headers["authorization"] == "Bearer supplied"
+
+
+def test_a_link_into_a_form_payload_is_replayed_and_noted_against_the_call() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("Content-Type", "application/x-www-form-urlencoded")],
+                body=Body(mime_type="application/x-www-form-urlencoded", text="ref=CNF-998172"),
+            ),
+        )
+    )
+    assert "# note: request.body[ref] replays what the capture observed, because " in client.code
+    sent = answer(client.code, {"/api/page": {"ref": "ignored"}})
+    assert sent[1].content == b"ref=CNF-998172"
+
+
+# The example capture, compiled
+
+
+def test_the_example_capture_compiles_into_a_client_that_follows_the_server() -> None:
+    client = compile_python(load_har(EXAMPLE_HAR))
+    sent = answer(
+        client.code,
+        {
+            "/api/v1/orders": {"orders": [{"id": "8899001"}]},
+            "/api/v1/orders/8899001": {"confirmation_ref": "CNF-8899001-02"},
+        },
+        {binding.variable: "supplied" for binding in client.secrets},
+    )
+    assert [str(request.url) for request in sent] == [
+        "https://shop.example.com/orders",
+        "https://shop.example.com/api/v1/orders?status=open&limit=20",
+        "https://shop.example.com/api/v1/orders/8899001",
+        "https://shop.example.com/api/v1/orders/8899001/confirm",
+    ]
+    assert json.loads(sent[3].content) == {
+        "payment_method": "invoice",
+        "confirmation_ref": "CNF-8899001-02",
+    }
+
+
+def test_the_compiled_example_carries_no_observed_credential() -> None:
+    client = compile_python(load_har(EXAMPLE_HAR))
+    for observed in (ACCESS_TOKEN, SESSION_VALUE, "example-csrf-value"):
+        assert observed not in client.code
+    assert "<redacted:" not in client.code
+
+
+def test_a_salt_makes_the_compiled_client_reproducible() -> None:
+    recorded = load_har(EXAMPLE_HAR)
+    first = compile_python(recorded, salt=b"fixed-salt")
+    second = compile_python(recorded, salt=b"fixed-salt")
+    assert first.code == second.code
+
+
+def test_a_compiled_client_with_nothing_to_send_makes_no_claim_about_a_workflow() -> None:
+    client = compile_python(
+        capture(
+            entry("a", "https://cdn.example.com/app.css", resource_type=ResourceType.STYLESHEET)
+        )
+    )
+    assert "Reproducing 0 of 1 captured request." in client.code
+    assert "The workflow runs in" not in client.code
+    assert send(client.code) == []
