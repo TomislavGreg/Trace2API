@@ -69,6 +69,7 @@ __all__ = [
     "ValueFlow",
     "flow_reason",
     "render_flows",
+    "standalone_index",
     "trace_flows",
 ]
 
@@ -348,11 +349,13 @@ def _embedded_match(text: str, sources: dict[str, _Source], position: int) -> _M
 _TOKEN_CHARACTER = re.compile(r"[A-Za-z0-9]")
 
 
-def _occurs_on_its_own(value: str, text: str) -> bool:
-    """Return whether ``value`` appears in ``text`` without running into its neighbours.
+def standalone_index(value: str, text: str) -> int:
+    """Return where ``value`` first sits in ``text`` on its own, or ``-1`` when it never does.
 
     ``4711`` sits on its own in ``CNF-4711-88`` and inside ``24711`` it does not, which is
-    the difference between a value carried along and a coincidence of digits.
+    the difference between a value carried along and a coincidence of digits. Generated code
+    rewrites the same span this finds, so the rule that recognized a link and the rule that
+    reproduces it stay one rule.
     """
     start = text.find(value)
     while start != -1:
@@ -360,9 +363,14 @@ def _occurs_on_its_own(value: str, text: str) -> bool:
         before = text[start - 1] if start else ""
         after = text[end] if end < len(text) else ""
         if not _TOKEN_CHARACTER.fullmatch(before) and not _TOKEN_CHARACTER.fullmatch(after):
-            return True
+            return start
         start = text.find(value, start + 1)
-    return False
+    return -1
+
+
+def _occurs_on_its_own(value: str, text: str) -> bool:
+    """Return whether ``value`` appears in ``text`` without running into its neighbours."""
+    return standalone_index(value, text) != -1
 
 
 def _flow(match: _Match, position: int, request: Request, location: str) -> ValueFlow:
