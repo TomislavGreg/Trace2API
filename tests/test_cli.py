@@ -59,6 +59,7 @@ def test_help_lists_the_commands() -> None:
     assert "flow" in output
     assert "graph" in output
     assert "generate" in output
+    assert "compile" in output
 
 
 def test_no_arguments_shows_help() -> None:
@@ -782,6 +783,60 @@ class TestGenerateCommand:
         result = runner.invoke(app, ["generate", str(EXAMPLE_HAR)])
         assert result.exit_code == 0
         assert "curl 'https://shop.example.com/api/v1/orders?status=open&limit=20'" in result.stdout
+
+
+class TestCompileCommand:
+    def test_reads_a_dependent_value_out_of_the_response_that_handed_it_out(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert result.stdout.startswith('"""Direct client for a workflow recorded ')
+        assert 'orders_id = response_4.json()["orders"][0]["id"]' in result.stdout
+        assert '"https://shop.example.com/api/v1/orders/" + str(orders_id)' in result.stdout
+
+    def test_the_docstring_accounts_for_the_workflow(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR)])
+        assert "The workflow runs in 3 stages" in result.stdout
+        assert "2 values read from a response as the client runs" in result.stdout
+
+    def test_generate_replays_what_compile_reads(self) -> None:
+        replayed = runner.invoke(app, ["generate", str(EXAMPLE_HAR), "--target", "python"])
+        compiled = runner.invoke(app, ["compile", str(EXAMPLE_HAR)])
+        assert '"https://shop.example.com/api/v1/orders/4711",' in replayed.stdout
+        assert '"https://shop.example.com/api/v1/orders/4711",' not in compiled.stdout
+
+    def test_noise_is_left_out_unless_it_is_asked_for(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        without = runner.invoke(app, ["compile", str(archive)])
+        with_noise = runner.invoke(app, ["compile", str(archive), "--all"])
+        assert "/static/app.css" not in without.stdout
+        assert "/static/app.css" in with_noise.stdout
+
+    def test_credentials_stay_out_of_the_code(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Authorization", "value": "Bearer secret-in-a-header"}],
+            ),
+        )
+        result = runner.invoke(app, ["compile", str(archive)])
+        assert result.exit_code == 0
+        assert "secret-in-a-header" not in result.output
+        assert "<redacted:" not in result.output
+        assert 'TRACE2API_AUTHORIZATION = os.environ["TRACE2API_AUTHORIZATION"]' in result.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["compile", str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+        assert result.stdout == ""
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["compile"]).exit_code != 0
 
 
 def saved_capture(path: Path, *entries: Entry, **metadata: Any) -> Path:
