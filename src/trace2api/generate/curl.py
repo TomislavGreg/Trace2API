@@ -9,6 +9,9 @@ that decide whether it works:
   and ``set -u`` stops the script rather than sending an empty one.
 * Literal text is single quoted and secrets are interpolated as separate shell words, so
   a body full of braces, spaces, or dollar signs reaches the server as it was observed.
+* A form encoded body that held a credential sends that field through
+  ``--data-urlencode``, so curl encodes the supplied value. Every other field, and every
+  other body, is sent as the text that was captured.
 * Headers curl derives for itself are left out, because sending a stale
   ``Content-Length`` or a ``Host`` that disagrees with the URL breaks the request. Every
   omission names the rule behind it.
@@ -26,6 +29,7 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from trace2api.analyze.relevance import DEFAULT_KEPT, Relevance, classify_capture
+from trace2api.generate.forms import FormField, form_fields, form_secrets
 from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header
@@ -143,7 +147,7 @@ def render_curl(entry: Entry, *, position: int, secrets: SecretBindings) -> Curl
     request = entry.request
     headers, omitted = partition_headers(request.headers, CURL_OMISSION_REASONS)
     url, query_secrets = _url_with_visible_secrets(request.url)
-    body, body_notes = _body_argument(request.body, secrets=secrets)
+    body, body_notes = _body_arguments(request.body, secrets=secrets)
     notes = [
         f"{secrets.variable_for(fingerprint)} goes into the query string, "
         "so its value has to be URL encoded"
@@ -152,13 +156,12 @@ def render_curl(entry: Entry, *, position: int, secrets: SecretBindings) -> Curl
     notes.extend(body_notes)
 
     arguments = [_shell_word(url, secrets)]
-    if request.method != _READ_METHOD or body is not None:
+    if request.method != _READ_METHOD or body:
         arguments.append(f"--request {request.method}")
     arguments.extend(f"--header {_shell_word(_header_line(header), secrets)}" for header in headers)
     if any(item.rule is HeaderRule.NEGOTIATED_BY_CLIENT for item in omitted):
         arguments.append("--compressed")
-    if body is not None:
-        arguments.append(body)
+    arguments.extend(body)
 
     return CurlCommand(
         entry_id=entry.id,
@@ -206,18 +209,51 @@ def _header_line(header: Header) -> str:
     return f"{header.name}: {header.value}"
 
 
-def _body_argument(body: Body | None, *, secrets: SecretBindings) -> tuple[str | None, list[str]]:
-    """Return the data argument for ``body``, and what the command cannot reproduce."""
+def _body_arguments(body: Body | None, *, secrets: SecretBindings) -> tuple[list[str], list[str]]:
+    """Return the data arguments for ``body``, and what the command cannot reproduce.
+
+    A form payload that held a credential sends that field through ``--data-urlencode``,
+    because the value comes back from the environment unencoded and nothing in the shell
+    would encode it. Every other body is one ``--data-raw`` argument holding the text as
+    captured.
+    """
     if body is None or body.is_empty:
-        return None, []
+        return [], []
     notes: list[str] = []
     if body.truncated:
         notes.append("the capture recorded only part of this body, so the request is incomplete")
     if body.encoding == "base64":
         size = body.size if body.size is not None else len(body.as_bytes())
         notes.append(f"a binary body of {size} bytes was observed here and is not reproduced")
-        return None, notes
-    return f"--data-raw {_shell_word(body.text or '', secrets)}", notes
+        return [], notes
+    fields = form_fields(body)
+    if fields is not None and form_secrets(fields):
+        return _form_arguments(fields, secrets), notes
+    return [f"--data-raw {_shell_word(body.text or '', secrets)}"], notes
+
+
+def _form_arguments(fields: list[FormField], secrets: SecretBindings) -> list[str]:
+    """Return one data argument per run of form fields, in the order they were sent.
+
+    curl joins the data arguments it is given with ``&``, so a run of fields that came
+    through redaction untouched is one ``--data-raw`` argument holding them as observed,
+    and each credential is a ``--data-urlencode`` argument of its own.
+    """
+    arguments: list[str] = []
+    observed: list[str] = []
+    for field in fields:
+        if not field.is_secret:
+            observed.append(field.spelled)
+            continue
+        if observed:
+            arguments.append(f"--data-raw {_shell_word('&'.join(observed), secrets)}")
+            observed = []
+        variable = secrets.variable_for(field.fingerprint or "")
+        name = _single_quote(f"{field.name}=")
+        arguments.append(f'--data-urlencode {name}"${variable}"')
+    if observed:
+        arguments.append(f"--data-raw {_shell_word('&'.join(observed), secrets)}")
+    return arguments
 
 
 def _shell_word(text: str, secrets: SecretBindings) -> str:

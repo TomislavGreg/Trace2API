@@ -418,6 +418,50 @@ def test_a_query_string_without_credentials_is_sent_as_it_was_observed() -> None
     assert str(request.url) == "https://shop.example.com/api/orders?status=open&status=paid"
 
 
+# Credentials in a form payload, which the client has to encode itself
+
+
+FORM = "application/x-www-form-urlencoded"
+
+
+def form_entry(text: str) -> Entry:
+    """Build an exchange posting ``text`` as a form encoded payload."""
+    return entry(
+        "a",
+        "https://shop.example.com/api/orders",
+        method="POST",
+        headers=[("Content-Type", FORM)],
+        body=Body(mime_type=FORM, text=text),
+    )
+
+
+def test_a_credential_in_a_form_payload_reaches_the_request_encoded() -> None:
+    client = generate_python(capture(form_entry(f"ref=CNF-998172&csrf_token={ACCESS_TOKEN}")))
+    assert ACCESS_TOKEN not in client.code
+    assert "<redacted:" not in client.code
+    assert "import urllib.parse" in client.code
+    assert client.calls[0].notes == [
+        "TRACE2API_BODY_CSRF_TOKEN is encoded into the form payload where the capture observed it"
+    ]
+    [request] = send(client.code, {"TRACE2API_BODY_CSRF_TOKEN": "a+b/c=d&e"})
+    assert request.content == b"ref=CNF-998172&csrf_token=a%2Bb%2Fc%3Dd%26e"
+
+
+def test_a_form_payload_keeps_every_field_the_client_did_not_have_to_supply() -> None:
+    client = generate_python(
+        capture(form_entry(f"csrf_token={ACCESS_TOKEN}&note=hello+world%21&page=1"))
+    )
+    [request] = send(client.code, {"TRACE2API_BODY_CSRF_TOKEN": "supplied"})
+    assert request.content == b"csrf_token=supplied&note=hello+world%21&page=1"
+
+
+def test_a_form_payload_without_credentials_is_sent_as_it_was_observed() -> None:
+    client = generate_python(capture(form_entry("q=shoes&page=1")))
+    assert "import urllib.parse" not in client.code
+    [request] = send(client.code)
+    assert request.content == b"q=shoes&page=1"
+
+
 # Bodies the client cannot reproduce
 
 
