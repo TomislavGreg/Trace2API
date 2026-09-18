@@ -11,8 +11,9 @@ that decide what it looks like are the ones that decide whether it works:
   body full of braces or backslashes reaches the server as it was observed.
 * Bodies are sent as ``content``, the exact bytes that were observed, rather than
   re-serialized from a parsed structure that could reorder or reformat them.
-* A query string holding a credential is sent as ``params``, so httpx encodes the
-  supplied value. Every other URL is written whole, exactly as observed.
+* A query string holding a credential is sent as ``params`` and a form encoded body
+  holding one has that field encoded through ``urllib.parse.quote_plus``, so the supplied
+  value is encoded either way. Every other URL and body is written exactly as observed.
 * Headers httpx sets for itself are left out, because sending a stale ``Content-Length``
   or a ``Host`` that disagrees with the URL breaks the request. Every omission names the
   rule behind it.
@@ -57,6 +58,7 @@ from trace2api.generate.dependencies import (
     resolve_dependencies,
     write_json_leaf,
 )
+from trace2api.generate.forms import FormField, form_fields, form_secrets
 from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header, QueryParams, Request
@@ -101,6 +103,9 @@ class PythonCall(BaseModel):
     omitted_headers: list[OmittedHeader] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
     """What the call cannot reproduce, such as a body the capture only sampled."""
+
+    encodes_a_form_field: bool = False
+    """Whether the call encodes a credential into a form payload as it is sent."""
 
 
 class PythonClient(BaseModel):
@@ -238,7 +243,7 @@ def render_call(
     replayed = () if dependencies is None else tuple(dependencies.replayed_by(position))
     headers, omitted = partition_headers(request.headers, HTTPX_OMISSION_REASONS)
     url, params, query_secrets = _url_arguments(request, secrets, sent)
-    content, notes = _content_argument(request.body, secrets=secrets, dependencies=sent)
+    body, notes, body_secrets = _body_argument(request.body, secrets=secrets, dependencies=sent)
     variable = f"{_RESPONSE_PREFIX}{position}"
 
     arguments = [_string(request.method), url]
@@ -246,8 +251,8 @@ def render_call(
         arguments.append(f"params={params}")
     if headers:
         arguments.append(f"headers={_headers_argument(headers, secrets, sent)}")
-    if content is not None:
-        arguments.append(f"content={content}")
+    if body is not None:
+        arguments.append(body)
 
     return PythonCall(
         entry_id=entry.id,
@@ -262,11 +267,17 @@ def render_call(
             "so httpx encodes the supplied value"
             for fingerprint in query_secrets
         ]
+        + [
+            f"{secrets.variable_for(fingerprint)} is encoded into the form payload "
+            "where the capture observed it"
+            for fingerprint in body_secrets
+        ]
         + notes
         + [
             f"{item.target_location} replays what the capture observed, because {item.reason}"
             for item in replayed
         ],
+        encodes_a_form_field=bool(body_secrets),
     )
 
 
@@ -411,32 +422,68 @@ def _grouped(
     return grouped
 
 
-def _content_argument(
+def _body_argument(
     body: Body | None,
     *,
     secrets: SecretBindings,
     dependencies: Sequence[ResolvedDependency] = (),
-) -> tuple[str | None, list[str]]:
-    """Return the body argument, and what the call cannot reproduce."""
+) -> tuple[str | None, list[str], tuple[str, ...]]:
+    """Return the body argument, what the call cannot reproduce, and the secrets it carries.
+
+    A form encoded body that held a credential has the value encoded where it was sent,
+    for the same reason a query string holding one is handed to httpx as parameters: the
+    value comes back from the environment unencoded. Every other body is sent as the text
+    that was captured, with the values read from an earlier response written into it.
+    """
     if body is None or body.is_empty:
-        return None, []
+        return None, [], ()
     notes: list[str] = []
     if body.truncated:
         notes.append("the capture recorded only part of this body, so the request is incomplete")
     if body.encoding == "base64":
         size = body.size if body.size is not None else len(body.as_bytes())
         notes.append(f"a binary body of {size} bytes was observed here and is not reproduced")
-        return None, notes
+        return None, notes, ()
+    form = form_fields(body)
+    fingerprints = () if form is None else form_secrets(form)
+    if form is not None and fingerprints:
+        return f"content={_form_expression(form, secrets)}", notes, fingerprints
     fields = [item for item in dependencies if item.site.kind is SiteKind.JSON_FIELD]
     if not fields:
-        return _expression(body.text or "", secrets), notes
+        return f"content={_expression(body.text or '', secrets)}", notes, ()
     content, rebuilt = _json_content(body, secrets, fields)
     if rebuilt:
         notes.append(
             "the payload is rebuilt around the values read above, so its spacing "
             "may differ from the capture"
         )
-    return content, notes
+    return f"content={content}", notes, ()
+
+
+_QUOTE_FUNCTION = "urllib.parse.quote_plus"
+"""What the module calls to encode a credential it writes into a form payload."""
+
+
+def _form_expression(fields: list[FormField], secrets: SecretBindings) -> str:
+    """Return a form payload with each credential encoded where its value was sent.
+
+    Every other field is written as the payload spelled it, so the only part of the body
+    that differs from the capture is the one part the client had to supply.
+    """
+    parts: list[str] = []
+    observed = ""
+    for index, field in enumerate(fields):
+        separator = "&" if index else ""
+        if not field.is_secret:
+            observed += separator + field.spelled
+            continue
+        parts.append(_string(f"{observed}{separator}{field.name}="))
+        observed = ""
+        variable = secrets.variable_for(field.fingerprint or "")
+        parts.append(f"{_QUOTE_FUNCTION}({variable})")
+    if observed:
+        parts.append(_string(observed))
+    return " + ".join(parts)
 
 
 _FIELD_TOKEN = "trace2api-field"
@@ -623,6 +670,7 @@ def _render_module(client: PythonClient, capture: Capture) -> str:
     needed = (
         ("json", _rewrites_a_payload(client)),
         ("os", not client.secrets.is_empty),
+        ("urllib.parse", _encodes_a_form_field(client)),
     )
     standard = [module for module, required in needed if required]
     if standard:
@@ -647,6 +695,11 @@ def _rewrites_a_payload(client: PythonClient) -> bool:
         item.site.kind is SiteKind.JSON_FIELD and item.site.quoted
         for item in client.dependencies.resolved
     )
+
+
+def _encodes_a_form_field(client: PythonClient) -> bool:
+    """Return whether the module encodes a credential into a form payload."""
+    return any(call.encodes_a_form_field for call in client.calls)
 
 
 def _run_function(client: PythonClient) -> list[str]:

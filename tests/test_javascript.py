@@ -482,6 +482,58 @@ def test_a_query_string_without_credentials_is_sent_as_it_was_observed(
     assert request["url"] == "https://shop.example.com/api/orders?status=open&status=paid"
 
 
+# Credentials in a form payload, which the client has to encode itself
+
+
+FORM = "application/x-www-form-urlencoded"
+
+
+def form_entry(text: str) -> Entry:
+    """Build an exchange posting ``text`` as a form encoded payload."""
+    return entry(
+        "a",
+        "https://shop.example.com/api/orders",
+        method="POST",
+        headers=[("Content-Type", FORM)],
+        body=Body(mime_type=FORM, text=text),
+    )
+
+
+@needs_node
+def test_a_credential_in_a_form_payload_reaches_the_request_encoded(
+    send: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = generate_javascript(capture(form_entry(f"ref=CNF-998172&csrf_token={ACCESS_TOKEN}")))
+    assert ACCESS_TOKEN not in client.code
+    assert "<redacted:" not in client.code
+    assert client.calls[0].notes == [
+        "TRACE2API_BODY_CSRF_TOKEN is encoded into the form payload where the capture observed it"
+    ]
+    [request] = send(client.code, {"TRACE2API_BODY_CSRF_TOKEN": "a+b/c=d&e"})
+    assert request["body"] == "ref=CNF-998172&csrf_token=a%2Bb%2Fc%3Dd%26e"
+
+
+@needs_node
+def test_a_form_payload_keeps_every_field_the_client_did_not_have_to_supply(
+    send: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = generate_javascript(
+        capture(form_entry(f"csrf_token={ACCESS_TOKEN}&note=hello+world%21&page=1"))
+    )
+    [request] = send(client.code, {"TRACE2API_BODY_CSRF_TOKEN": "supplied"})
+    assert request["body"] == "csrf_token=supplied&note=hello+world%21&page=1"
+
+
+@needs_node
+def test_a_form_payload_without_credentials_is_sent_as_it_was_observed(
+    send: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = generate_javascript(capture(form_entry("q=shoes&page=1")))
+    assert "encodeURIComponent" not in client.code
+    [request] = send(client.code)
+    assert request["body"] == "q=shoes&page=1"
+
+
 # Bodies the client cannot reproduce
 
 

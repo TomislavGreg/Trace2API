@@ -11,8 +11,9 @@ that decide what it looks like are the ones that decide whether it works:
   body full of braces or backslashes reaches the server as it was observed.
 * Bodies are sent as the text that was observed rather than re-serialized from a parsed
   structure that could reorder or reformat them.
-* A query string holding a credential is rebuilt through `URLSearchParams`, so the
-  supplied value is encoded. Every other URL is written whole, exactly as observed.
+* A query string holding a credential is rebuilt through `URLSearchParams` and a form
+  encoded body holding one has that field encoded through `encodeURIComponent`, so the
+  supplied value is encoded either way. Every other URL and body is written as observed.
 * Headers fetch sets for itself are left out, because sending a stale `Content-Length`
   or a `Host` that disagrees with the URL breaks the request. Every omission names the
   rule behind it.
@@ -36,6 +37,7 @@ from collections.abc import Iterable
 from pydantic import BaseModel, ConfigDict, Field
 
 from trace2api.analyze.relevance import DEFAULT_KEPT, Relevance, classify_capture
+from trace2api.generate.forms import FormField, form_fields, form_secrets
 from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header, Request
@@ -156,7 +158,7 @@ def render_call(entry: Entry, *, position: int, secrets: SecretBindings) -> Java
     request = entry.request
     headers, omitted = partition_headers(request.headers, FETCH_OMISSION_REASONS)
     url_lines, url, query_secrets = _url_expression(request, secrets, position=position)
-    body, notes = _body_property(request, secrets=secrets)
+    body, notes, body_secrets = _body_property(request, secrets=secrets)
     variable = f"{_RESPONSE_PREFIX}{position}"
 
     options = [f"method: {_string(request.method)}"]
@@ -182,6 +184,11 @@ def render_call(entry: Entry, *, position: int, secrets: SecretBindings) -> Java
             f"{secrets.variable_for(fingerprint)} is sent as a search parameter, "
             "so URLSearchParams encodes the supplied value"
             for fingerprint in query_secrets
+        ]
+        + [
+            f"{secrets.variable_for(fingerprint)} is encoded into the form payload "
+            "where the capture observed it"
+            for fingerprint in body_secrets
         ]
         + notes,
     )
@@ -240,18 +247,25 @@ def _repeats_a_name(headers: list[Header]) -> bool:
     return len(set(names)) != len(names)
 
 
-def _body_property(request: Request, *, secrets: SecretBindings) -> tuple[str | None, list[str]]:
-    """Return the body property for ``request``, and what the call cannot reproduce."""
+def _body_property(
+    request: Request, *, secrets: SecretBindings
+) -> tuple[str | None, list[str], tuple[str, ...]]:
+    """Return the body property for ``request``, what it cannot reproduce, and its secrets.
+
+    A form encoded body that held a credential has the value encoded where it was sent,
+    for the same reason a query string holding one is rebuilt: the value comes back from
+    the environment unencoded. Every other body is sent as the text that was captured.
+    """
     body: Body | None = request.body
     if body is None or body.is_empty:
-        return None, []
+        return None, [], ()
     notes: list[str] = []
     if body.truncated:
         notes.append("the capture recorded only part of this body, so the request is incomplete")
     if body.encoding == "base64":
         size = body.size if body.size is not None else len(body.as_bytes())
         notes.append(f"a binary body of {size} bytes was observed here and is not reproduced")
-        return None, notes
+        return None, notes, ()
     if request.method in _BODILESS_METHODS:
         # Sending one throws a TypeError before the request leaves, so the client would
         # not run at all. Reporting the body is the only faithful thing left to do.
@@ -259,8 +273,33 @@ def _body_property(request: Request, *, secrets: SecretBindings) -> tuple[str | 
             f"fetch cannot send a body with a {request.method} request, "
             "so the observed body is not reproduced"
         )
-        return None, notes
-    return _expression(body.text or "", secrets), notes
+        return None, notes, ()
+    fields = form_fields(body)
+    fingerprints = () if fields is None else form_secrets(fields)
+    if fields is not None and fingerprints:
+        return _form_expression(fields, secrets), notes, fingerprints
+    return _expression(body.text or "", secrets), notes, ()
+
+
+def _form_expression(fields: list[FormField], secrets: SecretBindings) -> str:
+    """Return a form payload with each credential encoded where its value was sent.
+
+    Every other field is written as the payload spelled it, so the only part of the body
+    that differs from the capture is the one part the client had to supply.
+    """
+    parts: list[str] = []
+    observed = ""
+    for index, field in enumerate(fields):
+        separator = "&" if index else ""
+        if not field.is_secret:
+            observed += separator + field.spelled
+            continue
+        parts.append(_string(f"{observed}{separator}{field.name}="))
+        observed = ""
+        parts.append(f"encodeURIComponent({secrets.variable_for(field.fingerprint or '')})")
+    if observed:
+        parts.append(_string(observed))
+    return " + ".join(parts)
 
 
 def _expression(text: str, secrets: SecretBindings) -> str:

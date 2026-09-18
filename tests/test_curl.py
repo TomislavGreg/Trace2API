@@ -414,6 +414,37 @@ def test_an_empty_body_adds_no_data_argument() -> None:
     assert "--data-raw" not in script.code
 
 
+# A form encoded body, where the credential has to be encoded rather than spliced
+
+
+FORM = "application/x-www-form-urlencoded"
+
+
+def form_entry(text: str) -> Entry:
+    """Build an exchange posting ``text`` as a form encoded payload."""
+    return entry(
+        "a",
+        "https://shop.example.com/api/orders",
+        method="POST",
+        headers=[("Content-Type", FORM)],
+        body=Body(mime_type=FORM, text=text),
+    )
+
+
+def test_a_form_field_holding_a_credential_is_sent_through_data_urlencode() -> None:
+    script = generate_curl(capture(form_entry(f"ref=CNF-998172&csrf_token={ACCESS_TOKEN}")))
+    assert "--data-raw 'ref=CNF-998172'" in script.code
+    assert """--data-urlencode 'csrf_token='"$TRACE2API_BODY_CSRF_TOKEN\"""" in script.code
+    # The placeholder redaction left in the payload must not reach the script.
+    assert "redacted" not in script.code
+
+
+def test_a_form_body_holding_no_credential_is_still_sent_as_observed() -> None:
+    script = generate_curl(capture(form_entry("q=shoes&page=1")))
+    assert "--data-raw 'q=shoes&page=1'" in script.code
+    assert "--data-urlencode" not in script.code
+
+
 # Quoting, which decides whether the script runs at all
 
 
@@ -488,6 +519,20 @@ def test_the_script_hands_curl_the_observed_request() -> None:
         "Cookie: session=supplied-session",
         "--data-raw",
         """{"note":"it's $safe"}""",
+    ]
+
+
+@needs_shell
+def test_the_script_hands_curl_the_form_fields_it_observed() -> None:
+    script = generate_curl(
+        capture(form_entry(f"csrf_token={ACCESS_TOKEN}&note=hello+world&page=1"))
+    )
+    [arguments] = run_script(script.code, {"TRACE2API_BODY_CSRF_TOKEN": "a+b/c=d&e"})
+    assert arguments[-4:] == [
+        "--data-urlencode",
+        "csrf_token=a+b/c=d&e",
+        "--data-raw",
+        "note=hello+world&page=1",
     ]
 
 

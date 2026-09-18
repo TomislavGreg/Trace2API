@@ -12,6 +12,10 @@ project-specific abstractions, nothing that has to be kept in step with Trace2AP
 value a request took from an earlier response, whether a client can read that value back
 while it runs and where it would have to look, in terms no language appears in, so a
 target can write the answer without deciding it.
+
+`forms.py` sits there for the same reason. It reads a form encoded payload field by
+field, so a target can send a credential through whatever encodes values for it rather
+than splicing the supplied value into a payload that was already encoded.
 """
 
 from __future__ import annotations
@@ -30,6 +34,12 @@ from trace2api.generate.dependencies import (
     SubstitutionSite,
     UnresolvedDependency,
     resolve_dependencies,
+)
+from trace2api.generate.forms import (
+    FORM_MEDIA_TYPE,
+    FormField,
+    form_fields,
+    form_secrets,
 )
 from trace2api.generate.headers import HeaderRule, OmittedHeader
 from trace2api.generate.javascript import (
@@ -53,10 +63,12 @@ from trace2api.generate.secrets import (
 
 __all__ = [
     "ENVIRONMENT_PREFIX",
+    "FORM_MEDIA_TYPE",
     "AccessorKind",
     "CurlCommand",
     "CurlScript",
     "DependencyResolution",
+    "FormField",
     "HeaderRule",
     "JavaScriptCall",
     "JavaScriptClient",
@@ -73,6 +85,8 @@ __all__ = [
     "bind_secrets",
     "compile_python",
     "environment_variable",
+    "form_fields",
+    "form_secrets",
     "generate_curl",
     "generate_javascript",
     "generate_python",
