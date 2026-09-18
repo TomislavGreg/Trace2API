@@ -656,21 +656,25 @@ and it keeps the value the recording held until the code is edited by hand.
   value came from, listed at the top of the script. Headers curl derives for itself are
   left out with the rule behind each omission stated, and a request the script cannot
   reproduce faithfully, such as one with a binary body, says so rather than sending
-  something else. `--all` writes the filtered requests too.
+  something else. A form encoded body that held a credential sends that field through
+  `--data-urlencode`, so curl encodes the supplied value. `--all` writes the filtered
+  requests too.
 - `trace2api generate CAPTURE --target python` writes the same requests as a Python
   module using `httpx`: a `run` function that sends them in the observed order and
   returns the responses, and a `main` that opens a client and reports what came back.
   Every credential is read from an environment variable at import time, so a missing one
   stops the client before it sends anything. Bodies are sent as the text that was
-  observed rather than re-serialized, and a query string that held a credential is sent
-  as parameters so the supplied value is encoded.
+  observed rather than re-serialized, a query string that held a credential is sent as
+  parameters, and a form field that held one is encoded through
+  `urllib.parse.quote_plus`, so the supplied value is encoded either way.
 - `trace2api generate CAPTURE --target javascript` writes the same requests as an ES
   module using `fetch`: a `run` function that awaits them in the observed order and
   returns the responses, and a `main` that reports what came back. Every credential is
   read from the environment as the module loads, so a missing one stops the client
   before it sends anything. A query string that held a credential is rebuilt through
-  `URLSearchParams`, and a body `fetch` refuses to send, such as one observed on a `GET`
-  request, is reported rather than dropped silently.
+  `URLSearchParams` and a form field that held one is encoded through
+  `encodeURIComponent`, and a body `fetch` refuses to send, such as one observed on a
+  `GET` request, is reported rather than dropped silently.
 - `trace2api compile CAPTURE` writes the same Python module against the dependency graph
   rather than against the recording alone: a value a later request took from an earlier
   response is read back out of that response as the client runs, whether it was sent in a
@@ -784,6 +788,12 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   as observed. A rule that fires on a name reports the name; no rule reports a value, and
   a value that is shown at all goes through the same rendering a comparison uses.
 - Generated clients read secrets from environment variables rather than embedding them.
+- A credential a workflow sent in a form encoded payload is encoded by the generated
+  client where the payload carried it. Redaction stores such a payload with the
+  placeholder percent encoded along with everything else, so a client that searched the
+  text for a placeholder would find none and send the stored text as the value. The
+  payload is read field by field instead, and every field the client did not have to
+  supply is sent as the payload spelled it.
 - A compiled client never reads a credential out of a response. Redaction replaced the
   value with a placeholder, so the capture no longer says where in the response it sat,
   and inventing a place to read it from would be a guess in the one part of a client where
@@ -868,6 +878,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-007 | Sanitized runnable cURL generator. | Done | T2A-004, T2A-003 |
 | T2A-008 | Sanitized runnable Python `httpx` generator. | Done | T2A-007 |
 | T2A-009 | Sanitized runnable JavaScript `fetch` generator. | Done | T2A-007 |
+| T2A-033 | Encode a credential written back into a form encoded payload, which redaction stores with the placeholder percent encoded. | Done | T2A-007, T2A-008, T2A-009 |
 
 ### Phase 2: Live capture
 
@@ -967,6 +978,7 @@ src/trace2api/
     generate/
         curl.py
         dependencies.py
+        forms.py
         headers.py
         javascript.py
         python.py
@@ -1061,9 +1073,11 @@ redacted before a line is written, and every secret becomes a reference to an en
 variable. `secrets.py` decides what those variables are called and reports where each
 value came from. `headers.py` holds the rules that decide which observed headers a
 client must not send as they stand, because they follow from HTTP rather than from the
-language being written. `curl.py`, `python.py`, and `javascript.py` are the targets, and
-each states in its own terms what it cannot reproduce rather than sending something
-else.
+language being written. `forms.py` reads a form encoded payload field by field, so a
+target can encode a credential where the payload carried it rather than splice a supplied
+value into text that was already encoded. `curl.py`, `python.py`, and `javascript.py` are
+the targets, and each states in its own terms what it cannot reproduce rather than sending
+something else.
 
 `dependencies.py` is what turns the graph into something a target can write. A link is
 two locations, and it answers one question about each pair: can a client read that value
@@ -1087,6 +1101,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
@@ -1100,7 +1115,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 - 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
-- 2026-09-03 - Added relevance filtering, separating page assets, analytics, and reporting traffic from the requests a workflow depends on, with a stated rule behind every verdict.
 
 ## License
 
