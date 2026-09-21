@@ -211,7 +211,7 @@ def test_a_credential_is_supplied_from_the_environment_rather_than_read_back() -
     assert "credential" in replayed.reason
 
 
-def test_a_value_sent_in_a_form_payload_is_replayed_with_the_reason() -> None:
+def test_a_value_sent_in_a_form_payload_names_the_field_it_goes_to() -> None:
     resolution = resolve(
         entry("a", "https://api.example.com/page", answered=json_body('{"ref":"CNF-998172"}')),
         entry(
@@ -219,12 +219,62 @@ def test_a_value_sent_in_a_form_payload_is_replayed_with_the_reason() -> None:
             "https://api.example.com/confirm",
             method="POST",
             headers=[("Content-Type", FORM)],
-            body=Body(mime_type=FORM, text="ref=CNF-998172"),
+            body=Body(mime_type=FORM, text="ref=CNF-998172&qty=2"),
+        ),
+    )
+    assert not resolution.unresolved
+    [dependency] = resolution.resolved
+    assert dependency.target_location == "request.body[ref]"
+    assert dependency.site.kind is SiteKind.FORM_FIELD
+    assert dependency.site.name == "ref"
+    assert dependency.site.index == 0
+
+
+def test_a_repeated_form_field_names_which_of_the_two_carried_the_value() -> None:
+    resolution = resolve(
+        entry("a", "https://api.example.com/page", answered=json_body('{"tag":"CNF-998172"}')),
+        entry(
+            "b",
+            "https://api.example.com/confirm",
+            method="POST",
+            headers=[("Content-Type", FORM)],
+            body=Body(mime_type=FORM, text="tag=new&tag=CNF-998172"),
+        ),
+    )
+    [dependency] = resolution.resolved
+    assert dependency.site.kind is SiteKind.FORM_FIELD
+    assert dependency.site.index == 1
+
+
+def test_a_form_field_is_named_the_way_the_server_read_it() -> None:
+    resolution = resolve(
+        entry("a", "https://api.example.com/page", answered=json_body('{"ref":"CNF-998172"}')),
+        entry(
+            "b",
+            "https://api.example.com/confirm",
+            method="POST",
+            headers=[("Content-Type", FORM)],
+            body=Body(mime_type=FORM, text="order+ref=CNF-998172"),
+        ),
+    )
+    [dependency] = resolution.resolved
+    assert dependency.site.name == "order ref"
+
+
+def test_a_value_sent_in_a_payload_that_is_neither_json_nor_a_form_is_replayed() -> None:
+    resolution = resolve(
+        entry("a", "https://api.example.com/page", answered=json_body('{"ref":"CNF-998172"}')),
+        entry(
+            "b",
+            "https://api.example.com/confirm",
+            method="POST",
+            headers=[("Content-Type", "text/plain")],
+            body=Body(mime_type="text/plain", text="confirming CNF-998172"),
         ),
     )
     assert not resolution.resolved
     [replayed] = resolution.unresolved
-    assert replayed.reason == "the payload it is sent in was not recorded as JSON"
+    assert replayed.reason == "the payload it is sent in is neither a JSON document nor a form"
 
 
 def test_a_value_taken_from_a_page_is_replayed_with_the_reason() -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from trace2api.generate import form_fields, form_secrets
+from trace2api.generate import form_field_places, form_fields, form_secrets
 from trace2api.models import (
     Body,
     Capture,
@@ -90,6 +90,30 @@ def test_a_field_sent_without_a_value_is_read_as_the_payload_spelled_it() -> Non
     assert fields is not None
     assert [field.spelled for field in fields] == ["draft", "q=shoes"]
     assert form_secrets(fields) == ()
+
+
+def test_a_value_is_read_back_the_way_the_server_read_it() -> None:
+    fields = form_fields(Body(mime_type=FORM, text="note=hello+world%21"))
+    assert fields is not None
+    assert fields[0].decoded == "hello world!"
+
+
+def test_a_field_is_placed_under_the_name_the_server_read() -> None:
+    fields = form_fields(Body(mime_type=FORM, text="order+ref=CNF-998172&qty=2"))
+    assert fields is not None
+    assert form_field_places(fields) == {("order ref", 0): 0, ("qty", 0): 1}
+
+
+def test_a_repeated_name_places_each_field_under_the_value_it_carried() -> None:
+    fields = form_fields(Body(mime_type=FORM, text="tag=new&q=shoes&tag=sale"))
+    assert fields is not None
+    assert form_field_places(fields) == {("tag", 0): 0, ("q", 0): 1, ("tag", 1): 2}
+
+
+def test_an_empty_pair_is_passed_over_rather_than_counted_as_a_field() -> None:
+    fields = form_fields(Body(mime_type=FORM, text="a=1&&b=2"))
+    assert fields is not None
+    assert form_field_places(fields) == {("a", 0): 0, ("b", 0): 2}
 
 
 def test_a_payload_that_is_not_a_form_reports_nothing_to_read() -> None:

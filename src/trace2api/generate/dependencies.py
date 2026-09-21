@@ -21,7 +21,8 @@ A link is resolved when all of these hold:
 * The response location addresses a header, a redirect target, or a field of a payload
   recorded as JSON.
 * The request location addresses a path segment, a query parameter, a header, or a field
-  of a JSON payload, and that place is still there in the capture.
+  of a payload recorded as JSON or as a form, and that place is still there in the
+  capture.
 * A value sitting inside a longer one lands in text rather than in a number, because
   splicing into a number would send a payload that is not the shape the server saw.
 
@@ -43,6 +44,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from trace2api.analyze.flow import CaptureFlows, FlowRule, ValueFlow
+from trace2api.generate.forms import FormField, form_field_places, form_fields
 from trace2api.generate.headers import omission_rule
 from trace2api.models import Body, Capture, Entry, Request, Response
 from trace2api.sanitize import is_redacted
@@ -76,6 +78,7 @@ class SiteKind(StrEnum):
     QUERY_PARAMETER = "query-parameter"
     HEADER = "header"
     JSON_FIELD = "json-field"
+    FORM_FIELD = "form-field"
 
 
 class ResponseAccessor(BaseModel):
@@ -101,10 +104,10 @@ class SubstitutionSite(BaseModel):
 
     kind: SiteKind
     name: str = ""
-    """Header name, lowercased, or query parameter name as it was sent."""
+    """Header name, lowercased, or query or form field name as the server read it."""
 
     index: int | None = Field(default=None, ge=0)
-    """Which of a repeated header or query parameter carried it."""
+    """Which of a repeated header, query parameter, or form field carried it."""
 
     segment: int | None = Field(default=None, ge=1)
     """Which path segment carried it, counting the non-empty ones from one."""
@@ -204,7 +207,7 @@ CREDENTIAL_REASON = "the value is a credential the client is given from the envi
 _UNREADABLE_RESPONSE = "the place in the response cannot be addressed field by field"
 _UNPARSED_RESPONSE = "the payload it came from was not recorded as JSON"
 _UNREADABLE_REQUEST = "the place in the request cannot be addressed field by field"
-_UNPARSED_REQUEST = "the payload it is sent in was not recorded as JSON"
+_UNPARSED_REQUEST = "the payload it is sent in is neither a JSON document nor a form"
 _DERIVED_HEADER = "the client sets that header itself rather than sending what was observed"
 _INSIDE_A_NUMBER = "it sits inside a number, which cannot be rewritten without changing its type"
 _NOT_IN_CAPTURE = "the exchange it was read from is not in the capture"
@@ -374,7 +377,15 @@ def _header_site(rest: str, request: Request) -> SubstitutionSite | str:
 
 
 def _body_site(rest: str, body: Body | None) -> SubstitutionSite | str:
-    """Return the payload field ``rest`` names, when the payload was recorded as JSON."""
+    """Return the payload field ``rest`` names, when the payload can be addressed at all.
+
+    A JSON payload is addressed by the steps leading to the field, a form encoded one by
+    the name the field was sent under. Any other payload is a format this project does not
+    claim to read, so a value sent in one stays where the capture observed it.
+    """
+    fields = form_fields(body)
+    if fields is not None:
+        return _form_site(rest, fields)
     if body is None or not body.is_json:
         return _UNPARSED_REQUEST
     steps = _steps(rest)
@@ -384,6 +395,21 @@ def _body_site(rest: str, body: Body | None) -> SubstitutionSite | str:
     if leaf is None:
         return _UNREADABLE_REQUEST
     return SubstitutionSite(kind=SiteKind.JSON_FIELD, steps=steps, quoted=isinstance(leaf, str))
+
+
+def _form_site(rest: str, fields: list[FormField]) -> SubstitutionSite | str:
+    """Return the form field ``rest`` names, when the payload still carries one.
+
+    A form value is text whatever it holds, so an identifier spelled into a longer value
+    can be written back into one without changing what the field is.
+    """
+    named = _NAMED_LOCATION.fullmatch(rest)
+    if named is None:
+        return _UNREADABLE_REQUEST
+    index = 0 if named["index"] is None else int(named["index"])
+    if (named["name"], index) not in form_field_places(fields):
+        return _UNREADABLE_REQUEST
+    return SubstitutionSite(kind=SiteKind.FORM_FIELD, name=named["name"], index=index)
 
 
 def _after(location: str, prefix: str) -> str | None:

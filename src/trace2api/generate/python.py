@@ -11,9 +11,10 @@ that decide what it looks like are the ones that decide whether it works:
   body full of braces or backslashes reaches the server as it was observed.
 * Bodies are sent as ``content``, the exact bytes that were observed, rather than
   re-serialized from a parsed structure that could reorder or reformat them.
-* A query string holding a credential is sent as ``params`` and a form encoded body
-  holding one has that field encoded through ``urllib.parse.quote_plus``, so the supplied
-  value is encoded either way. Every other URL and body is written exactly as observed.
+* A query string holding a credential is sent as ``params``, and a form encoded body has
+  every field the client supplies encoded through ``urllib.parse.quote_plus``, so a value
+  that arrives unencoded is encoded either way. Every other URL and body is written
+  exactly as observed.
 * Headers httpx sets for itself are left out, because sending a stale ``Content-Length``
   or a ``Host`` that disagrees with the URL breaks the request. Every omission names the
   rule behind it.
@@ -58,7 +59,7 @@ from trace2api.generate.dependencies import (
     resolve_dependencies,
     write_json_leaf,
 )
-from trace2api.generate.forms import FormField, form_fields, form_secrets
+from trace2api.generate.forms import FormField, form_field_places, form_fields, form_secrets
 from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header, QueryParams, Request
@@ -105,7 +106,7 @@ class PythonCall(BaseModel):
     """What the call cannot reproduce, such as a body the capture only sampled."""
 
     encodes_a_form_field: bool = False
-    """Whether the call encodes a credential into a form payload as it is sent."""
+    """Whether the call encodes a value it supplies into a form payload as it is sent."""
 
 
 class PythonClient(BaseModel):
@@ -241,6 +242,7 @@ def render_call(
     request = entry.request
     sent = () if dependencies is None else tuple(dependencies.sent_by(position))
     replayed = () if dependencies is None else tuple(dependencies.replayed_by(position))
+    in_form = [item for item in sent if item.site.kind is SiteKind.FORM_FIELD]
     headers, omitted = partition_headers(request.headers, HTTPX_OMISSION_REASONS)
     url, params, query_secrets = _url_arguments(request, secrets, sent)
     body, notes, body_secrets = _body_argument(request.body, secrets=secrets, dependencies=sent)
@@ -268,16 +270,18 @@ def render_call(
             for fingerprint in query_secrets
         ]
         + [
-            f"{secrets.variable_for(fingerprint)} is encoded into the form payload "
-            "where the capture observed it"
-            for fingerprint in body_secrets
+            f"{name} is encoded into the form payload where the capture observed it"
+            for name in [
+                *(secrets.variable_for(fingerprint) for fingerprint in body_secrets),
+                *dict.fromkeys(item.variable for item in in_form),
+            ]
         ]
         + notes
         + [
             f"{item.target_location} replays what the capture observed, because {item.reason}"
             for item in replayed
         ],
-        encodes_a_form_field=bool(body_secrets),
+        encodes_a_form_field=bool(body_secrets) or bool(in_form),
     )
 
 
@@ -430,10 +434,11 @@ def _body_argument(
 ) -> tuple[str | None, list[str], tuple[str, ...]]:
     """Return the body argument, what the call cannot reproduce, and the secrets it carries.
 
-    A form encoded body that held a credential has the value encoded where it was sent,
-    for the same reason a query string holding one is handed to httpx as parameters: the
-    value comes back from the environment unencoded. Every other body is sent as the text
-    that was captured, with the values read from an earlier response written into it.
+    A form encoded body has every field the client supplies encoded where it was sent, for
+    the same reason a query string holding a credential is handed to httpx as parameters:
+    neither a credential read from the environment nor a value read out of a response
+    arrives encoded. Every other body is sent as the text that was captured, with the
+    values read from an earlier response written into it.
     """
     if body is None or body.is_empty:
         return None, [], ()
@@ -445,9 +450,12 @@ def _body_argument(
         notes.append(f"a binary body of {size} bytes was observed here and is not reproduced")
         return None, notes, ()
     form = form_fields(body)
-    fingerprints = () if form is None else form_secrets(form)
-    if form is not None and fingerprints:
-        return f"content={_form_expression(form, secrets)}", notes, fingerprints
+    if form is not None:
+        fingerprints = form_secrets(form)
+        written = _by_form_field(form, dependencies)
+        if not fingerprints and not written:
+            return f"content={_expression(body.text or '', secrets)}", notes, ()
+        return f"content={_form_expression(form, written, secrets)}", notes, fingerprints
     fields = [item for item in dependencies if item.site.kind is SiteKind.JSON_FIELD]
     if not fields:
         return f"content={_expression(body.text or '', secrets)}", notes, ()
@@ -461,29 +469,57 @@ def _body_argument(
 
 
 _QUOTE_FUNCTION = "urllib.parse.quote_plus"
-"""What the module calls to encode a credential it writes into a form payload."""
+"""What the module calls to encode a value it writes into a form payload."""
 
 
-def _form_expression(fields: list[FormField], secrets: SecretBindings) -> str:
-    """Return a form payload with each credential encoded where its value was sent.
+def _form_expression(
+    fields: list[FormField],
+    written: dict[int, list[_Substitution]],
+    secrets: SecretBindings,
+) -> str:
+    """Return a form payload with each supplied value encoded where its field was sent.
 
-    Every other field is written as the payload spelled it, so the only part of the body
-    that differs from the capture is the one part the client had to supply.
+    Every other field is written as the payload spelled it, so the only parts of the body
+    that differ from the capture are the ones the client had to supply.
     """
     parts: list[str] = []
     observed = ""
     for index, field in enumerate(fields):
         separator = "&" if index else ""
-        if not field.is_secret:
+        supplied = _form_value(field, written.get(index, ()), secrets)
+        if supplied is None:
             observed += separator + field.spelled
             continue
         parts.append(_string(f"{observed}{separator}{field.name}="))
         observed = ""
-        variable = secrets.variable_for(field.fingerprint or "")
-        parts.append(f"{_QUOTE_FUNCTION}({variable})")
+        parts.append(supplied)
     if observed:
         parts.append(_string(observed))
     return " + ".join(parts)
+
+
+def _form_value(
+    field: FormField, written: Sequence[_Substitution], secrets: SecretBindings
+) -> str | None:
+    """Return what the client sends for one field, or ``None`` for one it does not supply.
+
+    A credential comes back from the environment as itself and a value read out of a
+    response is whatever the response held, so the whole field is encoded around either
+    one. The value is rebuilt from what the server read rather than from what the payload
+    spelled, because that is the value the trace found the link in.
+    """
+    if field.is_secret:
+        return f"{_QUOTE_FUNCTION}({secrets.variable_for(field.fingerprint or '')})"
+    if not written:
+        return None
+    return f"{_QUOTE_FUNCTION}({_pieces(field.decoded, written, secrets)})"
+
+
+def _by_form_field(
+    fields: list[FormField], dependencies: Sequence[ResolvedDependency]
+) -> dict[int, list[_Substitution]]:
+    """Gather the values read into each form field, by its place in the payload."""
+    return _grouped(dependencies, SiteKind.FORM_FIELD, form_field_places(fields))
 
 
 _FIELD_TOKEN = "trace2api-field"
