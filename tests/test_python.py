@@ -729,22 +729,69 @@ def test_a_credential_carried_between_requests_stays_an_environment_variable() -
     assert sent[1].headers["authorization"] == "Bearer supplied"
 
 
-def test_a_link_into_a_form_payload_is_replayed_and_noted_against_the_call() -> None:
+def confirming(entry_id: str, payload: str) -> Entry:
+    """Build an exchange posting ``payload`` as a form encoded body."""
+    return entry(
+        entry_id,
+        "https://shop.example.com/api/confirm",
+        method="POST",
+        headers=[("Content-Type", FORM)],
+        body=Body(mime_type=FORM, text=payload),
+    )
+
+
+def test_a_link_into_a_form_payload_is_read_back_and_encoded_where_it_was_sent() -> None:
     client = compile_python(
         capture(
             answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
-            entry(
-                "b",
-                "https://shop.example.com/api/confirm",
-                method="POST",
-                headers=[("Content-Type", "application/x-www-form-urlencoded")],
-                body=Body(mime_type="application/x-www-form-urlencoded", text="ref=CNF-998172"),
-            ),
+            confirming("b", "ref=CNF-998172&note=two+items&qty=2"),
         )
     )
-    assert "# note: request.body[ref] replays what the capture observed, because " in client.code
-    sent = answer(client.code, {"/api/page": {"ref": "ignored"}})
-    assert sent[1].content == b"ref=CNF-998172"
+    assert "# note: ref is encoded into the form payload where the capture observed it" in (
+        client.code
+    )
+    sent = answer(client.code, {"/api/page": {"ref": "CNF-8899001 02"}})
+    # The field the client supplies is encoded around what the response handed it, and the
+    # fields it was not asked to change keep the spelling the capture recorded.
+    assert sent[1].content == b"ref=CNF-8899001+02&note=two+items&qty=2"
+
+
+def test_a_link_into_a_repeated_form_field_rewrites_the_one_that_carried_it() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"tag":"CNF-998172"}'),
+            confirming("b", "tag=new&tag=CNF-998172"),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"tag": "sale"}})
+    assert sent[1].content == b"tag=new&tag=sale"
+
+
+def test_a_value_standing_inside_a_form_field_is_rewritten_where_it_stands() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"id":"88990012"}'),
+            confirming("b", "ref=CNF-88990012-02"),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"id": "47119983"}})
+    assert sent[1].content == b"ref=CNF-47119983-02"
+
+
+def test_a_credential_and_a_read_value_in_one_payload_are_both_supplied() -> None:
+    client = compile_python(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
+            confirming("b", f"ref=CNF-998172&csrf_token={ACCESS_TOKEN}"),
+        )
+    )
+    assert ACCESS_TOKEN not in client.code
+    sent = answer(
+        client.code,
+        {"/api/page": {"ref": "CNF-8899001"}},
+        {"TRACE2API_BODY_CSRF_TOKEN": "supplied token"},
+    )
+    assert sent[1].content == b"ref=CNF-8899001&csrf_token=supplied+token"
 
 
 # The example capture, compiled

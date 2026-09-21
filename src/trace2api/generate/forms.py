@@ -13,8 +13,12 @@ placeholder is the one place a generated client has to write something of its ow
 the value it writes has to be encoded, because what comes back from the environment is
 the credential itself rather than an encoded form of it.
 
+A value a later request took from an earlier response arrives the same way. It is read
+out of the response unencoded, so the field it goes into is encoded around it, for the
+same reason.
+
 Every other field is handed back exactly as the payload spells it, so a generated client
-changes only the field it had to supply and sends the rest as the capture holds them. A
+changes only the fields it had to supply and sends the rest as the capture holds them. A
 client that re-encodes what it was not asked to change sends a payload the server never
 saw, and the point of a generated client is that its request can be compared with the
 observed one.
@@ -22,6 +26,7 @@ observed one.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import NamedTuple
 from urllib.parse import unquote_plus
 
@@ -31,6 +36,7 @@ from trace2api.sanitize import split_secrets
 __all__ = [
     "FORM_MEDIA_TYPE",
     "FormField",
+    "form_field_places",
     "form_fields",
     "form_secrets",
 ]
@@ -47,6 +53,9 @@ class FormField(NamedTuple):
     spelled: str
     """The whole ``name=value`` pair, exactly as the payload spelled it."""
 
+    value: str = ""
+    """The value, still encoded as it was sent, empty when the field carried none."""
+
     fingerprint: str | None = None
     """Set when the value is a credential the client has to supply and encode."""
 
@@ -54,6 +63,11 @@ class FormField(NamedTuple):
     def is_secret(self) -> bool:
         """Return whether this field's value was removed by redaction."""
         return self.fingerprint is not None
+
+    @property
+    def decoded(self) -> str:
+        """Return the value as the server read it, which is how the trace reports it."""
+        return unquote_plus(self.value)
 
 
 def form_fields(body: Body | None) -> list[FormField] | None:
@@ -75,6 +89,26 @@ def form_secrets(fields: list[FormField]) -> tuple[str, ...]:
     return tuple(field.fingerprint or "" for field in fields if field.is_secret)
 
 
+def form_field_places(fields: Sequence[FormField]) -> dict[tuple[str, int], int]:
+    """Return where each named value sits, keyed by decoded name and by repeat of that name.
+
+    The trace locates a form value by the name the server read and by which of the values
+    sent under that name it was, so anything looking for the field behind such a location
+    has to count the payload the same way. A pair with nothing in it is passed over,
+    because a payload spelling ``a=1&&b=2`` sent two fields rather than three.
+    """
+    places: dict[tuple[str, int], int] = {}
+    seen: dict[str, int] = {}
+    for index, field in enumerate(fields):
+        if not field.spelled:
+            continue
+        name = unquote_plus(field.name)
+        occurrence = seen.get(name, 0)
+        seen[name] = occurrence + 1
+        places[(name, occurrence)] = index
+    return places
+
+
 def _field(pair: str) -> FormField:
     """Read one ``name=value`` pair, noticing a value redaction replaced whole.
 
@@ -87,5 +121,5 @@ def _field(pair: str) -> FormField:
         return FormField(name, pair)
     segments = split_secrets(unquote_plus(value))
     if len(segments) == 1 and segments[0].is_secret:
-        return FormField(name, pair, segments[0].fingerprint)
-    return FormField(name, pair)
+        return FormField(name, pair, value, segments[0].fingerprint)
+    return FormField(name, pair, value)

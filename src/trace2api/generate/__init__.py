@@ -38,6 +38,7 @@ from trace2api.generate.dependencies import (
 from trace2api.generate.forms import (
     FORM_MEDIA_TYPE,
     FormField,
+    form_field_places,
     form_fields,
     form_secrets,
 )
@@ -85,6 +86,7 @@ __all__ = [
     "bind_secrets",
     "compile_python",
     "environment_variable",
+    "form_field_places",
     "form_fields",
     "form_secrets",
     "generate_curl",
