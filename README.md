@@ -678,10 +678,12 @@ and it keeps the value the recording held until the code is edited by hand.
 - `trace2api compile CAPTURE` writes the same Python module against the dependency graph
   rather than against the recording alone: a value a later request took from an earlier
   response is read back out of that response as the client runs, whether it was sent in a
-  path segment, a query parameter, a header, or a JSON payload field. What it could not
-  resolve, such as a credential or a value sent in a payload that is not JSON, is replayed
-  as observed and reported with the reason, in the module docstring and as a note on the
-  call that sends it. `--all` compiles the filtered requests too.
+  path segment, a query parameter, a header, a JSON payload field, or a form encoded one.
+  A form field the client supplies is encoded where the payload carried it, and the fields
+  it was not asked to change are sent as the capture spelled them. What it could not
+  resolve, such as a credential or a value sent in a payload that is neither JSON nor a
+  form, is replayed as observed and reported with the reason, in the module docstring and
+  as a note on the call that sends it. `--all` compiles the filtered requests too.
 - Two synthetic captures, `examples/storefront-orders.har` and
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
@@ -729,9 +731,12 @@ and it keeps the value the recording held until the code is edited by hand.
   reporting the responses a client must read and the chain of requests it must send one
   after another.
 - Link resolution over that graph, deciding for each link whether a generated client can
-  read the value back at run time and naming the reason where it cannot. The decision is
-  language independent: it reports where in the response the value sits and where in the
-  later request it goes, which is the same instruction whichever language is written.
+  read the value back at run time and naming the reason where it cannot. A value that
+  lands in a path segment, a query parameter, a header, a JSON payload field, or a form
+  encoded one can be read back; a credential and a payload in a format this project does
+  not claim to read cannot. The decision is language independent: it reports where in the
+  response the value sits and where in the later request it goes, which is the same
+  instruction whichever language is written.
 - Ruff format, Ruff lint, and Pytest configuration.
 - GitHub Actions CI running the same checks on Python 3.12.
 
@@ -897,7 +902,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-015 | Detect values flowing from one response into later URLs, headers, query strings, or bodies. | Done | T2A-004 |
 | T2A-016 | Build and display a request dependency graph. | Done | T2A-015 |
 | T2A-017 | Compile a direct multi-request client from the inferred graph. | Done | T2A-016, T2A-014, T2A-008 |
-| T2A-032 | Resolve links into form encoded payloads when compiling a client. | Ready | T2A-017 |
+| T2A-032 | Resolve links into form encoded payloads when compiling a client. | Done | T2A-017 |
 
 ### Phase 4: Replay and verification
 
@@ -1074,10 +1079,10 @@ variable. `secrets.py` decides what those variables are called and reports where
 value came from. `headers.py` holds the rules that decide which observed headers a
 client must not send as they stand, because they follow from HTTP rather than from the
 language being written. `forms.py` reads a form encoded payload field by field, so a
-target can encode a credential where the payload carried it rather than splice a supplied
-value into text that was already encoded. `curl.py`, `python.py`, and `javascript.py` are
-the targets, and each states in its own terms what it cannot reproduce rather than sending
-something else.
+target can encode a credential, or a value read out of an earlier response, where the
+payload carried it rather than splice a supplied value into text that was already encoded.
+`curl.py`, `python.py`, and `javascript.py` are the targets, and each states in its own
+terms what it cannot reproduce rather than sending something else.
 
 `dependencies.py` is what turns the graph into something a target can write. A link is
 two locations, and it answers one question about each pair: can a client read that value
@@ -1101,6 +1106,7 @@ Further modules (`replay/`) are added as the tickets that need them land.
 
 ## Recent Progress
 
+- 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
 - 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
@@ -1114,7 +1120,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 - 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
-- 2026-09-04 - Added `trace2api inspect`, which lists what a capture holds and why each request was kept or filtered, with a synthetic archive to run it against.
 
 ## License
 
