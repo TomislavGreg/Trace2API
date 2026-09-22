@@ -64,6 +64,31 @@ class NameValue(TrafficModel):
     value: str
 
 
+_TEXT_MEDIA_TYPES = frozenset(
+    {
+        "application/javascript",
+        "application/x-javascript",
+        "application/x-www-form-urlencoded",
+        "application/xml",
+        "application/graphql",
+        "image/svg+xml",
+    }
+)
+
+
+def _is_textual(mime_type: str | None) -> bool:
+    """Return whether a media type describes something to hold as characters."""
+    if mime_type is None:
+        return False
+    media_type = mime_type.split(";", 1)[0].strip().lower()
+    return (
+        media_type.startswith("text/")
+        or media_type.endswith(("+json", "+xml"))
+        or media_type == "application/json"
+        or media_type in _TEXT_MEDIA_TYPES
+    )
+
+
 class Header(NameValue):
     """One HTTP header field, with the name spelled as it was observed."""
 
@@ -214,6 +239,27 @@ class Body(TrafficModel):
         except LookupError:
             return "utf-8"
         return charset
+
+    @classmethod
+    def from_bytes(cls, mime_type: str | None, raw: bytes) -> Body:
+        """Hold ``raw`` as text where its media type says it is text, and as base64 otherwise.
+
+        Shared by anything that observes a payload as bytes rather than reading one already
+        parsed by a source format: the live browser recorder and a replayed response alike.
+        """
+        if _is_textual(mime_type):
+            try:
+                return cls(mime_type=mime_type, text=raw.decode("utf-8"), size=len(raw))
+            except UnicodeDecodeError:
+                # The declared type says text but the bytes are not, so what was observed is
+                # kept rather than a lossy reading of it.
+                pass
+        return cls(
+            mime_type=mime_type,
+            text=base64.b64encode(raw).decode("ascii"),
+            encoding="base64",
+            size=len(raw),
+        )
 
 
 Milliseconds = Annotated[float | None, Field(default=None, ge=0)]

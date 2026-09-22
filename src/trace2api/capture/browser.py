@@ -24,7 +24,6 @@ holds whatever the session sent, and must pass through
 
 from __future__ import annotations
 
-import base64
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
@@ -70,17 +69,6 @@ _BODY_CARRYING_TYPES = frozenset(
     }
 )
 """Resource types whose response payload is kept. The rest are page furniture."""
-
-_TEXT_MEDIA_TYPES = frozenset(
-    {
-        "application/javascript",
-        "application/x-javascript",
-        "application/x-www-form-urlencoded",
-        "application/xml",
-        "application/graphql",
-        "image/svg+xml",
-    }
-)
 
 _UNSETTLED = "the recording ended before the response arrived"
 _UNREPORTED_FAILURE = "the browser reported no reason for the failure"
@@ -339,7 +327,7 @@ class BrowserRecorder:
             return Body(mime_type=mime_type)
         if len(raw) > self.max_body_bytes:
             return Body(mime_type=mime_type, size=len(raw), truncated=True)
-        return _body(mime_type, raw)
+        return Body.from_bytes(mime_type, raw)
 
 
 @contextmanager
@@ -499,37 +487,7 @@ def _request_body(request: PlaywrightRequest) -> Body | None:
     raw = _call(lambda: request.post_data_buffer)
     if not raw:
         return None
-    return _body(_header_value(request.headers_array(), "content-type"), raw)
-
-
-def _body(mime_type: str | None, raw: bytes) -> Body:
-    """Hold a payload as text where it is text, and as base64 where it is not."""
-    if _is_textual(mime_type):
-        try:
-            return Body(mime_type=mime_type, text=raw.decode("utf-8"), size=len(raw))
-        except UnicodeDecodeError:
-            # The declared type says text but the bytes are not, so what was sent is kept
-            # rather than a lossy reading of it.
-            pass
-    return Body(
-        mime_type=mime_type,
-        text=base64.b64encode(raw).decode("ascii"),
-        encoding="base64",
-        size=len(raw),
-    )
-
-
-def _is_textual(mime_type: str | None) -> bool:
-    """Return whether a media type describes something to hold as characters."""
-    if mime_type is None:
-        return False
-    media_type = mime_type.split(";", 1)[0].strip().lower()
-    return (
-        media_type.startswith("text/")
-        or media_type.endswith(("+json", "+xml"))
-        or media_type == "application/json"
-        or media_type in _TEXT_MEDIA_TYPES
-    )
+    return Body.from_bytes(_header_value(request.headers_array(), "content-type"), raw)
 
 
 def _declared_size(fields: Sequence[Mapping[str, str]]) -> int | None:
