@@ -36,9 +36,12 @@ which request values differ, and those values can be classified as inputs, const
 generated values, secrets, or unknowns. A single capture can be read for the values a
 later request took from an earlier response, those links can be read as a dependency
 graph showing what each request waits for, and a Python client can be compiled from that
-graph which reads those values back out of the responses instead of replaying them. The
-replay and verification stages described above are not implemented yet. The Roadmap and
-Ticket Board below track what is real and what is planned.
+graph which reads those values back out of the responses instead of replaying them. A
+sanitized capture can be replayed over the network, sending each request with the
+secrets redaction removed supplied explicitly rather than read from the environment.
+Comparing what came back against what the browser observed, and the `verify` command
+that will report it, are not implemented yet. The Roadmap and Ticket Board below track
+what is real and what is planned.
 
 ## Installation
 
@@ -684,6 +687,19 @@ and it keeps the value the recording held until the code is edited by hand.
   resolve, such as a credential or a value sent in a payload that is neither JSON nor a
   form, is replayed as observed and reported with the reason, in the module docstring and
   as a note on the call that sends it. `--all` compiles the filtered requests too.
+- A replay engine, `trace2api.replay.replay_capture`, that redacts a capture and sends the
+  requests worth keeping over the network with httpx, given the value of every secret
+  redaction removed as an explicit argument rather than read from the environment. A
+  request needing a secret the caller did not supply is refused before anything is sent. A
+  query string or a form encoded field that held a secret is decoded, substituted, and
+  encoded again, and a JSON field is substituted with the value escaped for its place in
+  the JSON text, so a secret holding a quote or a backslash still leaves the payload valid.
+  A header httpx computes or negotiates for itself, such as `Content-Length` or
+  `Connection`, is left for it to set. A request that fails at the network level is
+  reported with the reason and the host it was sent to, never the URL or headers a secret
+  could have reached. Nothing is redacted on the way out: a replayed response can carry
+  whatever the server actually sent back and must pass through `redact_capture` before it
+  is stored, displayed, or compared, the same as a live recording would.
 - Two synthetic captures, `examples/storefront-orders.har` and
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
@@ -814,6 +830,12 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   disk does not cost the explanation of what the workflow needed.
 - A recorded session runs in a throwaway browser profile. The workflow starts signed out,
   and no cookie jar, history, or cache is left behind on disk.
+- Replaying a capture never reads a secret from the process environment. Every value
+  redaction removed is supplied to the replay engine explicitly, by the same name a
+  generated client would read it under, and a request needing one that was not supplied is
+  refused before anything is sent. The response a replay actually receives is not
+  redacted by the engine itself, the same as a live recording is not: it must pass through
+  `redact_capture` before it is stored, displayed, or compared.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
   captures, cookies, tokens, browser profiles, and `.env` files are excluded by
@@ -908,7 +930,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-018 | Replay sanitized request definitions with explicit secret injection. | Ready | T2A-004, T2A-003 |
+| T2A-018 | Replay sanitized request definitions with explicit secret injection. | Done | T2A-004, T2A-003 |
 | T2A-019 | Compare browser observed and replayed responses using deterministic structural checks. | Backlog | T2A-018 |
 | T2A-020 | `verify` command explaining success or mismatches. | Backlog | T2A-019 |
 | T2A-021 | Generate a minimal Pytest regression test for a compiled workflow. | Backlog | T2A-017, T2A-020 |
@@ -991,6 +1013,8 @@ src/trace2api/
     sanitize/
         policy.py
         redact.py
+    replay/
+        replay.py
 examples/
 tests/
 ```
@@ -1098,14 +1122,23 @@ reads what the workflow depends on.
 classifies, then renders. Keeping that order in one place means no command can display a
 capture that has not been through redaction.
 
+`replay/` sends an analyzed capture over the network instead of writing it out as source.
+`replay.py` redacts the capture the same way `generate/` does, and resolves the same
+placeholders back into a request, except the value comes from an argument the caller
+passed rather than from an environment variable a generated client reads for itself: an
+engine has no process of its own to run in later, so it is given what it needs to send up
+front, and a request needing something it was not given is refused before anything goes
+out. Like `capture/`, it does not redact what it observes: the response it reports still
+holds whatever the server actually sent back, and must pass through `redact_capture`
+before it is stored, displayed, or compared.
+
 `examples/` holds synthetic archives written for this repository. They contain no real
 host, credential, or personal data, and the tests read them so the output shown above
 stays true.
 
-Further modules (`replay/`) are added as the tickets that need them land.
-
 ## Recent Progress
 
+- 2026-09-22 - Added a replay engine that sends the requests of a sanitized capture over the network, with every secret redaction removed supplied explicitly instead of read from the environment.
 - 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
 - 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
@@ -1119,7 +1152,6 @@ Further modules (`replay/`) are added as the tickets that need them land.
 - 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 - 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
-- 2026-09-05 - Added `trace2api generate`, which writes the requests a capture holds as a runnable cURL client that reads every credential from an environment variable.
 
 ## License
 
