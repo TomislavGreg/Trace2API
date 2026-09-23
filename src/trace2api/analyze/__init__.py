@@ -70,6 +70,12 @@ from trace2api.analyze.summary import (
     render_summary,
     summarize_capture,
 )
+from trace2api.analyze.verify import (
+    Mismatch,
+    MismatchKind,
+    ResponseComparison,
+    compare_responses,
+)
 
 __all__ = [
     "DEFAULT_KEPT",
@@ -96,9 +102,12 @@ __all__ = [
     "FlowEndpoint",
     "FlowRule",
     "GraphNode",
+    "Mismatch",
+    "MismatchKind",
     "PairedRequest",
     "Relevance",
     "RequestGraph",
+    "ResponseComparison",
     "TracedRequest",
     "UnpairedRequest",
     "ValueChange",
@@ -112,6 +121,7 @@ __all__ = [
     "classify_entry",
     "classify_values",
     "compare_requests",
+    "compare_responses",
     "diff_captures",
     "filter_capture",
     "graph_capture",
