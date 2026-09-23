@@ -38,9 +38,11 @@ later request took from an earlier response, those links can be read as a depend
 graph showing what each request waits for, and a Python client can be compiled from that
 graph which reads those values back out of the responses instead of replaying them. A
 sanitized capture can be replayed over the network, sending each request with the
-secrets redaction removed supplied explicitly rather than read from the environment.
-Comparing what came back against what the browser observed, and the `verify` command
-that will report it, are not implemented yet. The Roadmap and Ticket Board below track
+secrets redaction removed supplied explicitly rather than read from the environment. A
+replayed response can be compared against what the browser observed by structure rather
+than by value, since a live server is expected to hand out a fresh identifier or
+timestamp on every run. The `verify` command that will run a replay end to end and
+report the comparison is not implemented yet. The Roadmap and Ticket Board below track
 what is real and what is planned.
 
 ## Installation
@@ -700,6 +702,12 @@ and it keeps the value the recording held until the code is edited by hand.
   could have reached. Nothing is redacted on the way out: a replayed response can carry
   whatever the server actually sent back and must pass through `redact_capture` before it
   is stored, displayed, or compared, the same as a live recording would.
+- `trace2api.analyze.compare_responses` compares a browser observed response with a
+  replayed one by structure rather than by value: the status, the declared content type
+  ignoring its charset, and, where the body is JSON, its keys, nesting, and array lengths
+  down to the leaves. A leaf's value is never read, only whether both sides agree on its
+  type, so a session token or a timestamp a live server reissues on every run is not
+  reported as a mismatch, and a mismatch never carries a value that could be sensitive.
 - Two synthetic captures, `examples/storefront-orders.har` and
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
@@ -931,8 +939,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-018 | Replay sanitized request definitions with explicit secret injection. | Done | T2A-004, T2A-003 |
-| T2A-019 | Compare browser observed and replayed responses using deterministic structural checks. | Backlog | T2A-018 |
-| T2A-020 | `verify` command explaining success or mismatches. | Backlog | T2A-019 |
+| T2A-019 | Compare browser observed and replayed responses using deterministic structural checks. | Done | T2A-018 |
+| T2A-020 | `verify` command explaining success or mismatches. | Ready | T2A-019 |
 | T2A-021 | Generate a minimal Pytest regression test for a compiled workflow. | Backlog | T2A-017, T2A-020 |
 
 ### Phase 5: Protocol intelligence
@@ -998,6 +1006,7 @@ src/trace2api/
         graph.py
         relevance.py
         summary.py
+        verify.py
     capture/
         browser.py
         har.py
@@ -1096,6 +1105,17 @@ is what compiling a client needs: what can be sent at once, what has to wait, wh
 responses have to be read rather than discarded, and how many round trips cannot be
 avoided.
 
+`verify.py` compares a response the browser observed against one a replay of the same
+request actually got back. Equality is the wrong bar: a live server is expected to hand
+out a fresh session token or timestamp on every run, and a comparison that reported those
+as failures would bury a real regression under noise on every single replay. So the
+comparison reads shape instead of value, down to a JSON body's leaves: the same keys, the
+same nesting, the same array lengths, and the same type at every leaf, whichever text or
+number that leaf actually holds. A consequence of comparing shape rather than value is
+that nothing sensitive a body carries is ever read out into a report: what a mismatch
+names is a type such as `string` or a count such as `array of 3`, never the text or the
+number that triggered it.
+
 `generate/` writes an analyzed capture out as ordinary source code. Each target renders
 the same requests in a different language, and they share two rules: the capture is
 redacted before a line is written, and every secret becomes a reference to an environment
@@ -1138,6 +1158,7 @@ stays true.
 
 ## Recent Progress
 
+- 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
 - 2026-09-22 - Added a replay engine that sends the requests of a sanitized capture over the network, with every secret redaction removed supplied explicitly instead of read from the environment.
 - 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
 - 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
@@ -1151,7 +1172,6 @@ stays true.
 - 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
 - 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
 - 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
-- 2026-09-06 - Added a Python output target, so a capture can be written as an `httpx` client that sends the observed requests and returns the responses.
 
 ## License
 
