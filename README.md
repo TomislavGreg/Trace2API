@@ -38,12 +38,11 @@ later request took from an earlier response, those links can be read as a depend
 graph showing what each request waits for, and a Python client can be compiled from that
 graph which reads those values back out of the responses instead of replaying them. A
 sanitized capture can be replayed over the network, sending each request with the
-secrets redaction removed supplied explicitly rather than read from the environment. A
-replayed response can be compared against what the browser observed by structure rather
-than by value, since a live server is expected to hand out a fresh identifier or
-timestamp on every run. The `verify` command that will run a replay end to end and
-report the comparison is not implemented yet. The Roadmap and Ticket Board below track
-what is real and what is planned.
+secrets redaction removed supplied explicitly rather than read from the environment. The
+`verify` command runs that replay end to end and compares each response against what the
+browser observed by structure rather than by value, since a live server is expected to
+hand out a fresh identifier or timestamp on every run. The Roadmap and Ticket Board below
+track what is real and what is planned.
 
 ## Installation
 
@@ -606,6 +605,41 @@ from the environment as ever, because redaction removed the value that would say
 the response it sat. A value sent in a payload that was not recorded as JSON is the other,
 and it keeps the value the recording held until the code is edited by hand.
 
+None of the above sends a single byte over the network. `verify` is the one command that
+does, replaying the capture against the workflow it was recorded from and reporting
+whether the answer still looks the same. The synthetic archives in this repository were
+never served by a real endpoint, so this example is illustrative rather than something
+this quick start can run for real:
+
+```console
+$ export TRACE2API_AUTHORIZATION=...
+$ export TRACE2API_COOKIE_SESSION=... TRACE2API_COOKIE_LOCALE=... TRACE2API_X_CSRF_TOKEN=...
+$ trace2api verify examples/storefront-orders.har
+Capture: 8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Replayed 4 kept requests and compared each response with what was observed.
+
+1  GET   shop.example.com/orders  matched
+
+4  GET   shop.example.com/api/v1/orders  matched
+
+6  GET   shop.example.com/api/v1/orders/4711  matched
+
+7  POST  shop.example.com/api/v1/orders/4711/confirm  mismatched
+  response.body.status  body-shape  string -> absent
+
+4 requests replayed: 3 matched, 1 mismatched.
+Redacted 12 values before comparing, using one salt for the requests and another for the replayed responses.
+```
+
+Every credential the requests need is read from the environment, under the same names
+`generate` and `compile` already list, and a request needing one that is not set stops
+the command before anything is sent. A response is compared by shape rather than by
+value, so a session token or a timestamp the live server hands out fresh on this run is
+never reported as a mismatch: only a real difference, such as a field the workflow used
+to send back and no longer does, is. `verify` exits with a nonzero status whenever a
+request could not be confirmed, so it can be scripted around without reading its output,
+and `--json` writes the same account as a JSON document.
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -708,6 +742,17 @@ and it keeps the value the recording held until the code is edited by hand.
   down to the leaves. A leaf's value is never read, only whether both sides agree on its
   type, so a session token or a timestamp a live server reissues on every run is not
   reported as a mismatch, and a mismatch never carries a value that could be sensitive.
+- `trace2api verify CAPTURE` replays a capture's kept requests and reports whether each
+  response matches what the browser observed, using `compare_responses` for the
+  comparison itself. Every credential is read from the environment, under the same
+  variable names `generate` and `compile` list, and a request needing one that is not set
+  stops the command before anything is sent. A request the capture never observed a
+  response for, such as one that failed while it was being recorded, is reported as such
+  rather than compared against nothing. A replayed response is not redacted by the engine
+  that sent it, so it is redacted here before it is compared or shown, the same as any
+  other response. The command exits with a nonzero status when a request could not be
+  confirmed. `--all` replays the filtered requests too, and `--json` writes the same
+  report as a JSON document.
 - Two synthetic captures, `examples/storefront-orders.har` and
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
@@ -940,8 +985,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-018 | Replay sanitized request definitions with explicit secret injection. | Done | T2A-004, T2A-003 |
 | T2A-019 | Compare browser observed and replayed responses using deterministic structural checks. | Done | T2A-018 |
-| T2A-020 | `verify` command explaining success or mismatches. | Ready | T2A-019 |
-| T2A-021 | Generate a minimal Pytest regression test for a compiled workflow. | Backlog | T2A-017, T2A-020 |
+| T2A-020 | `verify` command explaining success or mismatches. | Done | T2A-019 |
+| T2A-021 | Generate a minimal Pytest regression test for a compiled workflow. | Ready | T2A-017, T2A-020 |
 
 ### Phase 5: Protocol intelligence
 
@@ -1152,12 +1197,20 @@ out. Like `capture/`, it does not redact what it observes: the response it repor
 holds whatever the server actually sent back, and must pass through `redact_capture`
 before it is stored, displayed, or compared.
 
+`verify_capture`, back in `analyze/verify.py`, is what ties replaying and comparing
+together into the command a caller actually runs. It calls `replay_capture` for the
+sending, redacts every response that comes back the same way any other response is
+redacted, since the engine deliberately leaves that to its caller, and hands each pair to
+`compare_responses`. A request the capture never observed a response for has nothing to
+compare against and is reported as such rather than skipped or scored as a pass.
+
 `examples/` holds synthetic archives written for this repository. They contain no real
 host, credential, or personal data, and the tests read them so the output shown above
 stays true.
 
 ## Recent Progress
 
+- 2026-09-24 - Added `trace2api verify`, which replays a capture's kept requests and reports whether each response matches what the browser observed, exiting with a nonzero status on a mismatch.
 - 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
 - 2026-09-22 - Added a replay engine that sends the requests of a sanitized capture over the network, with every secret redaction removed supplied explicitly instead of read from the environment.
 - 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
@@ -1171,7 +1224,6 @@ stays true.
 - 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
 - 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
 - 2026-09-08 - Added a browser recorder, so a live session can be watched through Playwright and kept as a capture the rest of the tool already reads.
-- 2026-09-07 - Added a JavaScript output target, so a capture can be written as an ES module that sends the observed requests with `fetch`.
 
 ## License
 
