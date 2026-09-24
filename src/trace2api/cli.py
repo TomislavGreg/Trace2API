@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -21,8 +22,10 @@ from trace2api.analyze import (
     render_flows,
     render_graph,
     render_summary,
+    render_verification,
     summarize_capture,
     trace_flows,
+    verify_capture,
 )
 from trace2api.capture import (
     BrowserCaptureError,
@@ -41,6 +44,7 @@ from trace2api.generate import (
 )
 from trace2api.inspection import inspect_capture, render_inspection
 from trace2api.models import Capture
+from trace2api.replay import MissingSecretError
 
 app = typer.Typer(
     name="trace2api",
@@ -55,6 +59,10 @@ app = typer.Typer(
 BAD_CAPTURE_EXIT_CODE = 2
 """Exit code used when a capture cannot be recorded, read, or written, kept apart from an
 ordinary failure."""
+
+VERIFY_FAILED_EXIT_CODE = 1
+"""Exit code used when verify ran but did not confirm the workflow, so a caller scripting
+around it can tell a mismatch apart from an ordinary success without reading the output."""
 
 DEFAULT_CAPTURE_FILE = Path("capture.json")
 """Where a recording is written when no destination is named."""
@@ -537,6 +545,58 @@ def compile_client(
     recorded = _load_capture(capture)
     keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
     typer.echo(compile_python(recorded, keep=keep).code, nl=False)
+
+
+@app.command()
+def verify(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Replay every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the verification as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Replay a capture and report whether each response matches what was observed.
+
+    Every credential a kept request needs is read from the environment, under the same
+    variable names generate lists and a compiled client reads. A request needing one that
+    is not set stops the command before anything is sent, rather than partway through the
+    workflow.
+
+    A response is compared by shape rather than by value: the same status, the same
+    declared content type, and where the body is JSON, the same keys, nesting, and array
+    lengths. A live server handing out a fresh session token or timestamp on this run is
+    not reported as a mismatch.
+
+    Exits with a nonzero status when a request could not be verified, so the command can
+    be scripted around without reading its output.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    try:
+        verified = verify_capture(recorded, os.environ, keep=keep)
+    except MissingSecretError as error:
+        _fail(f"{error.variable} is not set: it supplies {error.location}.")
+    if as_json:
+        typer.echo(verified.as_json())
+    else:
+        typer.echo(render_verification(verified), nl=False)
+    if not verified.passed:
+        raise typer.Exit(code=VERIFY_FAILED_EXIT_CODE)
 
 
 def _load_capture(path: Path) -> Capture:

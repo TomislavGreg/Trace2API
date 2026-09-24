@@ -71,10 +71,15 @@ from trace2api.analyze.summary import (
     summarize_capture,
 )
 from trace2api.analyze.verify import (
+    CaptureVerification,
     Mismatch,
     MismatchKind,
     ResponseComparison,
+    VerificationOutcome,
+    VerifiedRequest,
     compare_responses,
+    render_verification,
+    verify_capture,
 )
 
 __all__ = [
@@ -87,6 +92,7 @@ __all__ = [
     "CaptureDiff",
     "CaptureFlows",
     "CaptureSummary",
+    "CaptureVerification",
     "ChangeKind",
     "Classification",
     "ClassifiedRequest",
@@ -115,6 +121,8 @@ __all__ = [
     "ValueFlow",
     "ValueRole",
     "ValueRule",
+    "VerificationOutcome",
+    "VerifiedRequest",
     "align_captures",
     "build_graph",
     "classify_capture",
@@ -130,6 +138,8 @@ __all__ = [
     "render_flows",
     "render_graph",
     "render_summary",
+    "render_verification",
     "summarize_capture",
     "trace_flows",
+    "verify_capture",
 ]

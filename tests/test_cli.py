@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from trace2api import __version__, cli
+from trace2api.analyze import CaptureVerification, VerificationOutcome, VerifiedRequest
 from trace2api.capture import BrowserCaptureError, save_capture
 from trace2api.cli import app
 from trace2api.models import (
@@ -23,6 +24,7 @@ from trace2api.models import (
     ResourceType,
     Response,
 )
+from trace2api.replay import MissingSecretError
 
 runner = CliRunner()
 
@@ -837,6 +839,113 @@ class TestCompileCommand:
 
     def test_a_capture_is_required(self) -> None:
         assert runner.invoke(app, ["compile"]).exit_code != 0
+
+
+def verification(*requests: VerifiedRequest) -> CaptureVerification:
+    """Build a verification report as ``verify_capture`` would return one."""
+    return CaptureVerification(
+        source=CaptureSource.HAR,
+        created_at=datetime(2026, 9, 4, 9, 15, tzinfo=UTC),
+        total_requests=len(requests),
+        requests=list(requests),
+    )
+
+
+def verified_request(
+    outcome: VerificationOutcome = VerificationOutcome.MATCHED, position: int = 1
+) -> VerifiedRequest:
+    """Build one verified request, matched by default."""
+    return VerifiedRequest(
+        position=position,
+        method="GET",
+        host="shop.example.com",
+        path="/api/v1/orders",
+        outcome=outcome,
+    )
+
+
+class TestVerifyCommand:
+    def test_reports_a_match_and_exits_cleanly(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            cli,
+            "verify_capture",
+            lambda recorded, secrets, **kwargs: verification(verified_request()),
+        )
+        result = runner.invoke(app, ["verify", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert "matched" in result.stdout
+
+    def test_a_mismatch_exits_with_a_nonzero_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            cli,
+            "verify_capture",
+            lambda recorded, secrets, **kwargs: verification(
+                verified_request(VerificationOutcome.MISMATCHED)
+            ),
+        )
+        result = runner.invoke(app, ["verify", str(EXAMPLE_HAR)])
+        assert result.exit_code == cli.VERIFY_FAILED_EXIT_CODE
+        assert "mismatched" in result.stdout
+
+    def test_json_writes_the_report_as_a_json_document(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        report = verification(verified_request())
+        monkeypatch.setattr(cli, "verify_capture", lambda recorded, secrets, **kwargs: report)
+        result = runner.invoke(app, ["verify", str(EXAMPLE_HAR), "--json"])
+        assert result.exit_code == 0
+        assert json.loads(result.stdout) == json.loads(report.as_json())
+
+    def test_secrets_are_read_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen: dict[str, str] = {}
+
+        def fake_verify(recorded: Capture, secrets, **kwargs):
+            seen["authorization"] = secrets["TRACE2API_AUTHORIZATION"]
+            return verification(verified_request())
+
+        monkeypatch.setattr(cli, "verify_capture", fake_verify)
+        monkeypatch.setenv("TRACE2API_AUTHORIZATION", "example-token-not-a-real-credential")
+        result = runner.invoke(app, ["verify", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert seen["authorization"] == "example-token-not-a-real-credential"
+
+    def test_noise_is_left_out_unless_it_is_asked_for(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        seen: dict[str, Any] = {}
+
+        def fake_verify(recorded: Capture, secrets, **kwargs):
+            seen["keep"] = kwargs["keep"]
+            return verification(verified_request())
+
+        monkeypatch.setattr(cli, "verify_capture", fake_verify)
+        runner.invoke(app, ["verify", str(EXAMPLE_HAR)])
+        assert seen["keep"] == cli.DEFAULT_KEPT
+        runner.invoke(app, ["verify", str(EXAMPLE_HAR), "--all"])
+        assert seen["keep"] == tuple(cli.Relevance)
+
+    def test_a_missing_secret_is_reported_without_a_traceback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fake_verify(recorded: Capture, secrets, **kwargs):
+            raise MissingSecretError("TRACE2API_AUTHORIZATION", "request.headers.authorization")
+
+        monkeypatch.setattr(cli, "verify_capture", fake_verify)
+        result = runner.invoke(app, ["verify", str(EXAMPLE_HAR)])
+        assert result.exit_code == cli.BAD_CAPTURE_EXIT_CODE
+        assert result.stderr.startswith("error: TRACE2API_AUTHORIZATION is not set")
+        assert result.stdout == ""
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["verify", str(tmp_path / "absent.har")])
+        assert result.exit_code == cli.BAD_CAPTURE_EXIT_CODE
+        assert result.stderr.startswith("error: capture could not be read")
+        assert result.stdout == ""
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["verify"]).exit_code != 0
 
 
 def saved_capture(path: Path, *entries: Entry, **metadata: Any) -> Path:
