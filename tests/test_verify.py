@@ -3,12 +3,33 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
-from trace2api.analyze import Mismatch, MismatchKind, compare_responses
-from trace2api.models import Body, Headers, Response
+from trace2api.analyze import (
+    CaptureVerification,
+    Mismatch,
+    MismatchKind,
+    VerificationOutcome,
+    compare_responses,
+    render_verification,
+    verify_capture,
+)
+from trace2api.models import (
+    Body,
+    Capture,
+    CaptureMetadata,
+    CaptureSource,
+    Entry,
+    Headers,
+    Request,
+    ResourceType,
+    Response,
+)
+from trace2api.replay import MissingSecretError
 
 
 def response(
@@ -222,3 +243,168 @@ def test_mismatch_model_is_frozen() -> None:
     )
     with pytest.raises(ValidationError):
         mismatch.location = "response.other"  # type: ignore[misc]
+
+
+# Replaying and verifying a whole capture
+
+
+STARTED_AT = datetime(2026, 9, 4, 9, 15, tzinfo=UTC)
+
+
+def entry(
+    entry_id: str,
+    url: str,
+    *,
+    method: str = "GET",
+    headers: list[tuple[str, str]] | None = None,
+    observed: Response | None = None,
+) -> Entry:
+    """Build one observed exchange, with an observed JSON response by default."""
+    if observed is None:
+        observed = response(text='{"id": 1}')
+    return Entry(
+        id=entry_id,
+        started_at=STARTED_AT,
+        request=Request(method=method, url=url, headers=Headers.from_pairs(headers or [])),
+        response=observed,
+    )
+
+
+def capture(*entries: Entry) -> Capture:
+    """Build a capture holding ``entries``."""
+    return Capture(
+        metadata=CaptureMetadata(source=CaptureSource.HAR, created_at=STARTED_AT),
+        entries=list(entries),
+    )
+
+
+def verify_against(handler, capture: Capture, secrets: dict[str, str] | None = None, **kwargs):
+    """Verify ``capture`` against a stub transport, without touching the network."""
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return handler(request)
+
+    with httpx.Client(transport=httpx.MockTransport(handle), follow_redirects=False) as client:
+        return verify_capture(capture, secrets or {}, client=client, **kwargs)
+
+
+def test_reports_matched_when_the_replay_reproduces_the_observed_shape() -> None:
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": 2}),
+        capture(entry("a", "https://shop.example.com/api/orders")),
+    )
+    assert len(verification.requests) == 1
+    item = verification.requests[0]
+    assert item.position == 1
+    assert item.method == "GET"
+    assert item.host == "shop.example.com"
+    assert item.path == "/api/orders"
+    assert item.outcome is VerificationOutcome.MATCHED
+    assert item.comparison is not None
+    assert item.comparison.matches
+    assert verification.passed
+
+
+def test_reports_mismatched_when_the_replay_differs_in_shape() -> None:
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": "one"}),
+        capture(entry("a", "https://shop.example.com/api/orders")),
+    )
+    item = verification.requests[0]
+    assert item.outcome is VerificationOutcome.MISMATCHED
+    assert item.comparison is not None
+    assert not item.comparison.matches
+    assert not verification.passed
+
+
+def test_reports_failed_when_the_request_could_not_be_sent() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    verification = verify_against(
+        handler, capture(entry("a", "https://shop.example.com/api/orders"))
+    )
+    item = verification.requests[0]
+    assert item.outcome is VerificationOutcome.FAILED
+    assert item.error is not None
+    assert item.comparison is None
+    assert not verification.passed
+
+
+def test_reports_not_observed_when_the_capture_never_saw_a_response() -> None:
+    unobserved = entry("a", "https://shop.example.com/api/orders").model_copy(
+        update={"response": None, "failure": "net::ERR_TIMED_OUT"}
+    )
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": 2}), capture(unobserved)
+    )
+    item = verification.requests[0]
+    assert item.outcome is VerificationOutcome.NOT_OBSERVED
+    assert item.comparison is None
+    assert not verification.passed
+
+
+def test_positions_match_what_inspect_numbers_over_the_whole_capture() -> None:
+    noise = entry("noise", "https://cdn.example.com/app.css").model_copy(
+        update={"resource_type": ResourceType.STYLESHEET}
+    )
+    kept = entry("kept", "https://shop.example.com/api/orders")
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": 2}), capture(noise, kept)
+    )
+    assert [item.position for item in verification.requests] == [2]
+
+
+def test_passed_is_false_when_there_is_nothing_to_replay() -> None:
+    verification = verify_against(lambda request: httpx.Response(200), capture())
+    assert verification.requests == []
+    assert not verification.passed
+
+
+def test_a_missing_secret_stops_verification_before_anything_is_sent() -> None:
+    secret_entry = entry(
+        "a",
+        "https://shop.example.com/api/orders",
+        headers=[("Authorization", "Bearer super-secret-token")],
+    )
+    with pytest.raises(MissingSecretError, match="TRACE2API_AUTHORIZATION"):
+        verify_against(lambda request: httpx.Response(200), capture(secret_entry))
+
+
+def test_a_credential_in_the_replayed_response_is_redacted_before_comparison() -> None:
+    observed = response(text='{"token": "the-original-session-token-value"}')
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"token": "a-brand-new-session-token-value"}),
+        capture(entry("a", "https://shop.example.com/api/orders", observed=observed)),
+    )
+    item = verification.requests[0]
+    assert item.outcome is VerificationOutcome.MATCHED
+    assert verification.redacted_values >= 2
+
+
+def test_as_json_round_trips_a_capture_verification() -> None:
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": 2}),
+        capture(entry("a", "https://shop.example.com/api/orders")),
+    )
+    document = json.loads(verification.as_json())
+    assert document["requests"][0]["outcome"] == "matched"
+    assert CaptureVerification.model_validate(document) == verification
+
+
+def test_render_verification_reports_the_outcome_of_each_request() -> None:
+    verification = verify_against(
+        lambda request: httpx.Response(200, json={"id": "one"}),
+        capture(entry("a", "https://shop.example.com/api/orders")),
+    )
+    text = render_verification(verification)
+    assert "shop.example.com/api/orders" in text
+    assert "mismatched" in text
+    assert "response.body.id" in text
+    assert "number -> string" in text
+    assert "1 request replayed: 1 mismatched." in text
+
+
+def test_render_verification_reports_when_nothing_was_kept() -> None:
+    text = render_verification(verify_against(lambda request: httpx.Response(200), capture()))
+    assert "No kept request to replay." in text
