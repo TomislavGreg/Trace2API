@@ -54,6 +54,7 @@ from trace2api.generate.python import (
     compile_python,
     generate_python,
 )
+from trace2api.generate.regression import PytestModule, generate_pytest_test
 from trace2api.generate.secrets import (
     ENVIRONMENT_PREFIX,
     SecretBinding,
@@ -76,6 +77,7 @@ __all__ = [
     "OmittedHeader",
     "PythonCall",
     "PythonClient",
+    "PytestModule",
     "ResolvedDependency",
     "ResponseAccessor",
     "SecretBinding",
@@ -91,6 +93,7 @@ __all__ = [
     "form_secrets",
     "generate_curl",
     "generate_javascript",
+    "generate_pytest_test",
     "generate_python",
     "resolve_dependencies",
 ]

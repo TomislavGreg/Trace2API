@@ -40,6 +40,7 @@ from trace2api.generate import (
     compile_python,
     generate_curl,
     generate_javascript,
+    generate_pytest_test,
     generate_python,
 )
 from trace2api.inspection import inspect_capture, render_inspection
@@ -597,6 +598,41 @@ def verify(
         typer.echo(render_verification(verified), nl=False)
     if not verified.passed:
         raise typer.Exit(code=VERIFY_FAILED_EXIT_CODE)
+
+
+@app.command()
+def test(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Have the test replay every captured request, noise filtered ones included.",
+        ),
+    ] = False,
+) -> None:
+    """Write a Pytest regression test that replays CAPTURE and checks it still verifies.
+
+    The test rereads CAPTURE at run time rather than embedding it, so rerunning the test
+    later checks the capture as it stands on disk, not a copy taken when the test was
+    written. It runs the same replay and structural comparison as verify, wrapped in an
+    assertion a test suite or continuous integration can run on its own.
+
+    Every credential a kept request needs is read from the environment, under the same
+    variable names generate, compile, and verify already use. A credential that is not
+    set skips the test instead of failing it.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    typer.echo(generate_pytest_test(recorded, capture, keep=keep).code, nl=False)
 
 
 def _load_capture(path: Path) -> Capture:
