@@ -62,6 +62,7 @@ def test_help_lists_the_commands() -> None:
     assert "graph" in output
     assert "generate" in output
     assert "compile" in output
+    assert "test" in output
 
 
 def test_no_arguments_shows_help() -> None:
@@ -946,6 +947,57 @@ class TestVerifyCommand:
 
     def test_a_capture_is_required(self) -> None:
         assert runner.invoke(app, ["verify"]).exit_code != 0
+
+
+class TestTestCommand:
+    def test_writes_a_pytest_module_for_the_shipped_example(self) -> None:
+        result = runner.invoke(app, ["test", str(EXAMPLE_HAR)])
+        assert result.exit_code == 0
+        assert result.stdout.startswith('"""Regression test for the workflow recorded ')
+        assert "def test_workflow_still_verifies() -> None:" in result.stdout
+        assert "from trace2api.analyze import Relevance, render_verification, verify_capture" in (
+            result.stdout
+        )
+
+    def test_the_capture_path_is_written_in_as_given(self, tmp_path: Path) -> None:
+        archive = write_har(tmp_path / "capture.har", har_entry("https://shop.example.com/api/x"))
+        result = runner.invoke(app, ["test", str(archive)])
+        assert result.exit_code == 0
+        assert f"CAPTURE = Path({json.dumps(str(archive))})" in result.stdout
+
+    def test_credentials_stay_out_of_the_code(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry(
+                "https://shop.example.com/api/v1/orders",
+                headers=[{"name": "Authorization", "value": "Bearer secret-in-a-header"}],
+            ),
+        )
+        result = runner.invoke(app, ["test", str(archive)])
+        assert result.exit_code == 0
+        assert "secret-in-a-header" not in result.output
+        assert "<redacted:" not in result.output
+        assert '"TRACE2API_AUTHORIZATION",' in result.stdout
+
+    def test_noise_is_left_out_unless_it_is_asked_for(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "capture.har",
+            har_entry("https://shop.example.com/api/v1/orders"),
+            har_entry("https://cdn.example.com/static/app.css", resource_type="stylesheet"),
+        )
+        without = runner.invoke(app, ["test", str(archive)])
+        with_noise = runner.invoke(app, ["test", str(archive), "--all"])
+        assert "replays 1 kept request of 2 captured requests" in without.stdout
+        assert "replays 2 kept requests of 2 captured requests" in with_noise.stdout
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        result = runner.invoke(app, ["test", str(tmp_path / "absent.har")])
+        assert result.exit_code == cli.BAD_CAPTURE_EXIT_CODE
+        assert result.stderr.startswith("error: capture could not be read")
+        assert result.stdout == ""
+
+    def test_a_capture_is_required(self) -> None:
+        assert runner.invoke(app, ["test"]).exit_code != 0
 
 
 def saved_capture(path: Path, *entries: Entry, **metadata: Any) -> Path:
