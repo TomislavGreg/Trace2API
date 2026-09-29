@@ -459,6 +459,84 @@ class TestClassifyCommand:
         assert "Classified 30 values: 7 inputs, 5 secrets, 18 constants." in result.stdout
 
 
+class TestPaginateCommand:
+    def test_a_page_that_moved_is_recognized(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        second = write_har(
+            tmp_path / "second.har", har_entry("https://shop.example.com/api/v1/orders?page=2")
+        )
+        result = runner.invoke(app, ["paginate", str(first), str(second)])
+        assert result.exit_code == 0
+        assert 'request.query[page]  page-number  "2" (second recording only)' in result.stdout
+        assert "Recognized 1 pagination value in 1 request: 1 page-number value." in result.stdout
+
+    def test_nothing_recognized_is_reported_plainly(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=open"),
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?status=shipped"),
+        )
+        result = runner.invoke(app, ["paginate", str(first), str(second)])
+        assert result.exit_code == 0
+        assert "No pagination was recognized between the two recordings." in result.stdout
+
+    def test_explain_names_the_rule_behind_a_value(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders?offset=0")
+        )
+        second = write_har(
+            tmp_path / "second.har",
+            har_entry("https://shop.example.com/api/v1/orders?offset=20"),
+        )
+        result = runner.invoke(app, ["paginate", str(first), str(second), "--explain"])
+        assert result.exit_code == 0
+        assert "named after a count of results already seen" in result.stdout
+
+    def test_noise_is_read_only_when_asked(self, tmp_path: Path) -> None:
+        archived = har_entry("https://cdn.example.com/img/logo.png?page=1", resource_type="image")
+        first = write_har(tmp_path / "first.har", archived)
+        archived_second = har_entry(
+            "https://cdn.example.com/img/logo.png?page=2", resource_type="image"
+        )
+        second = write_har(tmp_path / "second.har", archived_second)
+        without = runner.invoke(app, ["paginate", str(first), str(second)])
+        assert "Reading 0 paired requests for pagination." in without.stdout
+        with_noise = runner.invoke(app, ["paginate", str(first), str(second), "--all"])
+        assert "Reading 1 paired request for pagination." in with_noise.stdout
+
+    def test_json_reports_the_style_and_rule(self, tmp_path: Path) -> None:
+        first = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        second = write_har(
+            tmp_path / "second.har", har_entry("https://shop.example.com/api/v1/orders?page=2")
+        )
+        result = runner.invoke(app, ["paginate", str(first), str(second), "--json"])
+        assert result.exit_code == 0
+        payload = json.loads(result.stdout)
+        value = payload["requests"][0]["values"][0]
+        assert value["style"] == "page-number"
+        assert value["rule"] == "page-number-name"
+
+    def test_a_missing_capture_is_reported_without_a_traceback(self, tmp_path: Path) -> None:
+        archive = write_har(
+            tmp_path / "first.har", har_entry("https://shop.example.com/api/v1/orders")
+        )
+        result = runner.invoke(app, ["paginate", str(archive), str(tmp_path / "absent.har")])
+        assert result.exit_code == 2
+        assert result.stderr.startswith("error: capture could not be read")
+
+    def test_the_shipped_examples_recognize_the_added_page(self) -> None:
+        result = runner.invoke(app, ["paginate", str(EXAMPLE_HAR), str(SECOND_RUN_HAR)])
+        assert result.exit_code == 0
+        assert "Recognized 1 pagination value in 1 request: 1 page-number value." in result.stdout
+
+
 def har_exchange(url: str, *, returns: str, **request: Any) -> dict[str, Any]:
     """Build one archived exchange whose response hands out ``returns``."""
     archived = har_entry(url, **request)

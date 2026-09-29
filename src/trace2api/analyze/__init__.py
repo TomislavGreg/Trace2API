@@ -52,6 +52,15 @@ from trace2api.analyze.graph import (
     graph_capture,
     render_graph,
 )
+from trace2api.analyze.pagination import (
+    PaginatedRequest,
+    PaginatedValue,
+    PaginationDetection,
+    PaginationRule,
+    PaginationStyle,
+    detect_pagination,
+    render_pagination,
+)
 from trace2api.analyze.relevance import (
     DEFAULT_KEPT,
     Classification,
@@ -110,6 +119,11 @@ __all__ = [
     "GraphNode",
     "Mismatch",
     "MismatchKind",
+    "PaginatedRequest",
+    "PaginatedValue",
+    "PaginationDetection",
+    "PaginationRule",
+    "PaginationStyle",
     "PairedRequest",
     "Relevance",
     "RequestGraph",
@@ -130,6 +144,7 @@ __all__ = [
     "classify_values",
     "compare_requests",
     "compare_responses",
+    "detect_pagination",
     "diff_captures",
     "filter_capture",
     "graph_capture",
@@ -137,6 +152,7 @@ __all__ = [
     "render_diff",
     "render_flows",
     "render_graph",
+    "render_pagination",
     "render_summary",
     "render_verification",
     "summarize_capture",

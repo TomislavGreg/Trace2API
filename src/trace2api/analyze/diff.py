@@ -63,7 +63,9 @@ __all__ = [
     "compare_requests",
     "diff_captures",
     "display_value",
+    "is_header_location",
     "render_diff",
+    "value_name",
 ]
 
 
@@ -706,6 +708,35 @@ def _added(location: str, value: str) -> ValueChange:
 def _removed(location: str, value: str) -> ValueChange:
     """Return a value the first recording sent and the second did not."""
     return ValueChange(location=location, kind=ChangeKind.REMOVED, left=value)
+
+
+# Locations
+
+_UNNAMED_LOCATIONS = frozenset({"request.path", "request.query", "request.headers", _BODY_LOCATION})
+"""Locations that stand for a whole part of a request rather than for a named value."""
+
+_HEADER_LOCATION_PREFIX = "request.headers."
+
+_INDEX_SUFFIX = re.compile(r"(\[\d+\])+$")
+
+
+def value_name(location: str) -> str | None:
+    """Return the name a value was sent under, or ``None`` where it has none.
+
+    A path segment has no name, and neither does a payload that could only be read whole.
+    An index is not a name either, so ``request.query[tag][1]`` is named ``tag``.
+    """
+    trimmed = _INDEX_SUFFIX.sub("", location)
+    if trimmed in _UNNAMED_LOCATIONS:
+        return None
+    if trimmed.endswith("]"):
+        return trimmed[trimmed.rindex("[") + 1 : -1].lower()
+    return trimmed.rsplit(".", 1)[-1].lower()
+
+
+def is_header_location(location: str) -> bool:
+    """Return whether a location names a request header."""
+    return location.startswith(_HEADER_LOCATION_PREFIX)
 
 
 # Rendering
