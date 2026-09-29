@@ -33,7 +33,9 @@ capture, recorded or imported from a HAR archive, can be summarized, inspected, 
 written out as a runnable cURL script, Python `httpx` module, or JavaScript `fetch`
 module from the command line. Two recordings of one workflow can be compared to show
 which request values differ, and those values can be classified as inputs, constants,
-generated values, secrets, or unknowns. A single capture can be read for the values a
+generated values, secrets, or unknowns. The same comparison can be read for page-number,
+offset, and cursor pagination, naming the parameter a workflow used to move through a
+list of results. A single capture can be read for the values a
 later request took from an earlier response, those links can be read as a dependency
 graph showing what each request waits for, and a Python client can be compiled from that
 graph which reads those values back out of the responses instead of replaying them. A
@@ -267,6 +269,31 @@ choose is worse than reporting it as unknown.
 
 `--constants` lists the values that held still as well, `--all` classifies the noise too,
 and `--json` writes the same verdicts as a document, constants included.
+
+An input that moves in a particular way is worth naming on its own: `paginate` reads the
+same two recordings for the page index, offset, or continuation value a workflow used to
+move through a list of results:
+
+```console
+$ trace2api paginate examples/storefront-orders.har examples/storefront-orders-second-run.har
+Left:  8 requests from har, recorded 2026-09-04T09:15:00+00:00
+Right: 7 requests from har, recorded 2026-09-04T09:41:00+00:00
+Reading 4 paired requests for pagination.
+
+4 -> 3  GET shop.example.com/api/v1/orders
+  request.query[page]  page-number  "2" (second recording only)
+
+Recognized 1 pagination value in 1 request: 1 page-number value.
+Redacted 12 values before comparing, using one salt for both captures.
+```
+
+The second run asked for page two, which is exactly what `page` moving from absent to `2`
+says. A value is recognized by name, such as `page`, `offset`, `cursor`, or the Relay
+style `after` and `before`, and a page index or a count of results is confirmed by shape
+as well, since either is always a whole number. A name such as `start` is left alone,
+since it is as likely to open a date range as a page. `--explain` adds the rule behind
+each value, `--all` reads the requests filtered as noise, and `--json` writes the same
+detection as a document.
 
 Some of what a workflow sends was never supplied to it at all. It came out of an earlier
 response, and a client that replays the observed value works once. `flow` reads a single
@@ -718,6 +745,14 @@ was recorded.
   rather than the value. `--constants` lists the values that held still as well,
   `--explain` adds the rule behind each verdict, `--all` classifies the requests filtered
   as noise, and `--json` writes the same verdicts as a JSON document.
+- `trace2api paginate LEFT RIGHT` reads the same two recordings for the value a workflow
+  used to move through a list of results, and says whether it reads as a page-number, an
+  offset, or a cursor. Each is recognized by name, such as `page`, `offset`, `cursor`, or
+  the Relay style `after` and `before`, and the page-number and offset styles are
+  confirmed by shape as well, since either is always a whole number. Only a value that
+  moved between the two recordings is reported. `--explain` adds the rule behind each
+  value, `--all` reads the requests filtered as noise, and `--json` writes the same
+  detection as a JSON document.
 - `trace2api flow CAPTURE` reads one capture and reports the request values that came out
   of an earlier response: an identifier that became a path segment, a cursor that became a
   query parameter, a reference that reached a payload field, a cookie or a token sent back
@@ -1042,7 +1077,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-022 | Detect common cursor, offset, and page number pagination. | Ready | T2A-013 |
+| T2A-022 | Detect common cursor, offset, and page number pagination. | Done | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Ready | T2A-004 |
 | T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Ready | T2A-015, T2A-003 |
 | T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
@@ -1099,6 +1134,7 @@ src/trace2api/
         diff.py
         flow.py
         graph.py
+        pagination.py
         relevance.py
         summary.py
         verify.py
@@ -1182,6 +1218,14 @@ nearest verdict, for the same reason an unpaired request stays unpaired: a clien
 a guess fails in a way that is hard to see. Credentials are decided before anything else,
 because a placeholder is not a value and nothing about what a value looks like applies to
 one.
+
+`pagination.py` reads the same paired values for one narrower question: does a value say
+how far into a list of results a request reaches? It shares the pairing and the value by
+value comparison with `classify.py`, but decides only the values a name recognizes as a
+page index, a count of results, or a continuation value, and only where the value actually
+moved between the two recordings. A page index and a count of results are confirmed by
+shape as well, since both are always whole numbers; a continuation value carries no such
+constraint, because a server is free to spell one however it likes.
 
 `flow.py` asks a different question of the same capture, and needs only one recording to
 ask it: which values did the workflow never have until a response handed them over? It
@@ -1268,6 +1312,7 @@ stays true.
 
 ## Recent Progress
 
+- 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
 - 2026-09-27 - Added `trace2api test`, which writes a capture's verify check out as a Pytest module that rereads the capture and reruns the comparison each time it is invoked.
 - 2026-09-24 - Added `trace2api verify`, which replays a capture's kept requests and reports whether each response matches what the browser observed, exiting with a nonzero status on a mismatch.
 - 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
@@ -1281,7 +1326,6 @@ stays true.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 - 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
 - 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
-- 2026-09-09 - Added `trace2api record`, which saves a live browser session as a sanitized local capture that `inspect` and `generate` read alongside HAR archives.
 
 ## License
 
