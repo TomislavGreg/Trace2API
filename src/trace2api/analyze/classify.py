@@ -56,6 +56,8 @@ from trace2api.analyze.diff import (
     alignment_reason,
     compare_requests,
     display_value,
+    is_header_location,
+    value_name,
 )
 from trace2api.analyze.relevance import DEFAULT_KEPT, Relevance
 from trace2api.models import Capture
@@ -292,10 +294,10 @@ def _match(value: ComparedValue) -> tuple[ValueRule, str | None]:
         return ValueRule.CREDENTIAL, None
     if not value.is_changed:
         return ValueRule.HELD_STILL, None
-    name = _value_name(value.location)
+    name = value_name(value.location)
     if name is not None and _names_a_minted_value(name):
         return ValueRule.GENERATED_NAME, name
-    if name is not None and _is_header(value.location) and name in _BROWSER_HEADERS:
+    if name is not None and is_header_location(value.location) and name in _BROWSER_HEADERS:
         return ValueRule.BROWSER_HEADER, name
     if value.location == _WHOLE_BODY:
         return ValueRule.OPAQUE_PAYLOAD, None
@@ -313,13 +315,6 @@ def _match(value: ComparedValue) -> tuple[ValueRule, str | None]:
 
 _WHOLE_BODY = "request.body"
 """The location a payload gets when neither side could be read as a structure."""
-
-_UNNAMED_LOCATIONS = frozenset({"request.path", "request.query", "request.headers", _WHOLE_BODY})
-"""Locations that stand for a whole part of a request rather than for a named value."""
-
-_HEADER_LOCATION = "request.headers."
-
-_INDEX_SUFFIX = re.compile(r"(\[\d+\])+$")
 
 _GENERATED_NAMES = frozenset(
     {
@@ -392,25 +387,6 @@ _PLAIN = re.compile(r"[\w .,:@/+-]*", re.UNICODE)
 def _carries_a_secret(value: str) -> bool:
     """Return whether any part of ``value`` is a placeholder redaction left behind."""
     return any(part.is_secret for part in split_secrets(value))
-
-
-def _value_name(location: str) -> str | None:
-    """Return the name a value was sent under, or ``None`` where it has none.
-
-    A path segment has no name, and neither does a payload that could only be read whole.
-    An index is not a name either, so ``request.query[tag][1]`` is named ``tag``.
-    """
-    trimmed = _INDEX_SUFFIX.sub("", location)
-    if trimmed in _UNNAMED_LOCATIONS:
-        return None
-    if trimmed.endswith("]"):
-        return trimmed[trimmed.rindex("[") + 1 : -1].lower()
-    return trimmed.rsplit(".", 1)[-1].lower()
-
-
-def _is_header(location: str) -> bool:
-    """Return whether a location names a request header."""
-    return location.startswith(_HEADER_LOCATION)
 
 
 def _names_a_minted_value(name: str) -> bool:

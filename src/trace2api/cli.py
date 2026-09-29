@@ -15,12 +15,14 @@ from trace2api.analyze import (
     Relevance,
     classify_capture,
     classify_values,
+    detect_pagination,
     diff_captures,
     graph_capture,
     render_classification,
     render_diff,
     render_flows,
     render_graph,
+    render_pagination,
     render_summary,
     render_verification,
     summarize_capture,
@@ -371,6 +373,60 @@ def classify(
         render_classification(classified, include_constants=include_constants, explain=explain),
         nl=False,
     )
+
+
+@app.command()
+def paginate(
+    left: Annotated[
+        Path,
+        typer.Argument(
+            metavar="LEFT",
+            help="Path to the first recording of the workflow.",
+            show_default=False,
+        ),
+    ],
+    right: Annotated[
+        Path,
+        typer.Argument(
+            metavar="RIGHT",
+            help="Path to a second recording of the same workflow, a page apart.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Read every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each pagination value."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the detection as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Detect page-number, offset, and cursor pagination across two recordings of a workflow.
+
+    A page index that increments by one, a count of results already seen, and a
+    continuation value an earlier response would have handed out are recognized by name,
+    the first two confirmed by shape as well, since a page index or a count of results is
+    always a whole number.
+
+    Only a value that actually moved between the two recordings is reported, the same as
+    diff and classify: a parameter that held still says nothing about how the workflow
+    paged this time, whatever its name.
+    """
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    detected = detect_pagination(_load_capture(left), _load_capture(right), keep=keep)
+    if as_json:
+        typer.echo(detected.as_json())
+        return
+    typer.echo(render_pagination(detected, explain=explain), nl=False)
 
 
 @app.command()
