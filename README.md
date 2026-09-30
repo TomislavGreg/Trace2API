@@ -46,8 +46,10 @@ browser observed by structure rather than by value, since a live server is expec
 hand out a fresh identifier or timestamp on every run. The same check can be written out
 as a Pytest module with `test`, which rereads the capture and reruns the comparison each
 time it is invoked, so a workflow can be watched for regressions from a test suite rather
-than by running the command by hand. The Roadmap and Ticket Board below track what is
-real and what is planned.
+than by running the command by hand. A single capture can also be read for the GraphQL
+operation each request names, since a GraphQL workflow sends every request to the same
+path and only its payload says what it actually does. The Roadmap and Ticket Board below
+track what is real and what is planned.
 
 ## Installation
 
@@ -294,6 +296,39 @@ as well, since either is always a whole number. A name such as `start` is left a
 since it is as likely to open a date range as a page. `--explain` adds the rule behind
 each value, `--all` reads the requests filtered as noise, and `--json` writes the same
 detection as a document.
+
+A GraphQL workflow sends every request to the same path, so none of the above says what a
+request actually does. `graphql` reads a single capture for the operation each request
+names instead:
+
+```console
+$ trace2api graphql examples/storefront-graphql.har
+Capture: 2 requests from har, recorded 2026-09-10T11:00:00+00:00
+Reading 2 kept requests for GraphQL operations.
+
+1  POST  shop.example.com/graphql
+  query ListOrders  variables: page, status
+
+2  POST  shop.example.com/graphql
+  mutation ConfirmOrder  variables: orderId, paymentMethod
+
+Recognized 2 GraphQL operations.
+Redacted 2 values before reading this.
+```
+
+Two requests to the same endpoint, read for what each one actually names rather than for
+where it went. A request is recognized from a JSON body carrying a `query` field alongside
+an `operationName` or a `variables` field, from a query field whose text opens with the
+`query`, `mutation`, or `subscription` keyword, from a raw `application/graphql` body, or
+from a `query` parameter sent on a GET request. A JSON body holding an unrelated field
+also named `query`, such as a search box, names no operation and carries no variables, so
+it is left alone rather than guessed at.
+
+Only the shape of an operation is reported: its type, its name, and the names of its
+variables. What it actually asks for, and any literal value its document carries, is never
+printed, the same restraint `inspect` applies to a query string. `--explain` adds the rule
+behind each recognized operation, `--all` reads the requests filtered as noise, and
+`--json` writes the same operations as a document.
 
 Some of what a workflow sends was never supplied to it at all. It came out of an earlier
 response, and a client that replays the observed value works once. `flow` reads a single
@@ -753,6 +788,15 @@ was recorded.
   moved between the two recordings is reported. `--explain` adds the rule behind each
   value, `--all` reads the requests filtered as noise, and `--json` writes the same
   detection as a JSON document.
+- `trace2api graphql CAPTURE` reads one capture and reports the requests that carry a
+  GraphQL operation, naming its type, its name where the workflow gave it one, and the
+  names of the variables it declared. A request is recognized from a JSON body carrying a
+  `query` field alongside an `operationName` or a `variables` field, from a query field
+  whose text opens with an operation keyword, from a raw `application/graphql` body, or
+  from a `query` parameter on a GET request. What an operation actually asks for, and any
+  literal value its document carries, is never printed. `--explain` adds the rule behind
+  each recognized operation, `--all` reads the requests filtered as noise, and `--json`
+  writes the same operations as a JSON document.
 - `trace2api flow CAPTURE` reads one capture and reports the request values that came out
   of an earlier response: an identifier that became a path segment, a cursor that became a
   query parameter, a reference that reached a payload field, a cookie or a token sent back
@@ -1078,7 +1122,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-022 | Detect common cursor, offset, and page number pagination. | Done | T2A-013 |
-| T2A-023 | Understand GraphQL requests and operation names. | Ready | T2A-004 |
+| T2A-023 | Understand GraphQL requests and operation names. | Done | T2A-004 |
 | T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Ready | T2A-015, T2A-003 |
 | T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
 
@@ -1134,6 +1178,7 @@ src/trace2api/
         diff.py
         flow.py
         graph.py
+        graphql.py
         pagination.py
         relevance.py
         summary.py
@@ -1227,6 +1272,16 @@ moved between the two recordings. A page index and a count of results are confir
 shape as well, since both are always whole numbers; a continuation value carries no such
 constraint, because a server is free to spell one however it likes.
 
+`graphql.py` asks a narrower question of one recording than `classify.py` and
+`pagination.py` ask of two: not what a value is, but what a request that carries a GraphQL
+payload actually does, since every such request goes to the same path and only its body
+says which query, mutation, or subscription it sent. Recognition is name and shape based,
+the same as the rest of the project: a JSON body's `query` field is read as an operation
+only alongside an `operationName` or a `variables` field, or where its text itself opens
+with an operation keyword, which is what keeps an unrelated field a workflow happens to
+call `query` from being read as one. Only the shape of a recognized operation is reported,
+never what it actually asks for or any literal value its document carries.
+
 `flow.py` asks a different question of the same capture, and needs only one recording to
 ask it: which values did the workflow never have until a response handed them over? It
 reads what each response carried and what each later request sent, and links the two where
@@ -1308,10 +1363,12 @@ compare against and is reported as such rather than skipped or scored as a pass.
 
 `examples/` holds synthetic archives written for this repository. They contain no real
 host, credential, or personal data, and the tests read them so the output shown above
-stays true.
+stays true. `storefront-graphql.har` is a second workflow, sent as two requests to one
+GraphQL endpoint, for the commands that read what a request names rather than where it went.
 
 ## Recent Progress
 
+- 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
 - 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
 - 2026-09-27 - Added `trace2api test`, which writes a capture's verify check out as a Pytest module that rereads the capture and reruns the comparison each time it is invoked.
 - 2026-09-24 - Added `trace2api verify`, which replays a capture's kept requests and reports whether each response matches what the browser observed, exiting with a nonzero status on a mismatch.
@@ -1325,7 +1382,6 @@ stays true.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 - 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
-- 2026-09-10 - Redaction now removes the credentials written into pages, scripts, and other text bodies, so a token a workflow only ever showed in a page no longer reaches a saved capture.
 
 ## License
 
