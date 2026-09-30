@@ -17,11 +17,13 @@ from trace2api.analyze import (
     classify_values,
     detect_pagination,
     diff_captures,
+    find_graphql_operations,
     graph_capture,
     render_classification,
     render_diff,
     render_flows,
     render_graph,
+    render_graphql,
     render_pagination,
     render_summary,
     render_verification,
@@ -427,6 +429,50 @@ def paginate(
         typer.echo(detected.as_json())
         return
     typer.echo(render_pagination(detected, explain=explain), nl=False)
+
+
+@app.command()
+def graphql(
+    capture: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CAPTURE",
+            help="Path to a saved capture or a HAR 1.2 archive exported from a browser.",
+            show_default=False,
+        ),
+    ],
+    include_noise: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            "-a",
+            help="Read every captured request, including the ones filtered as noise.",
+        ),
+    ] = False,
+    explain: Annotated[
+        bool,
+        typer.Option("--explain", help="Add the rule behind each recognized operation."),
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the operations as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Recognize the requests of a capture that carry a GraphQL operation.
+
+    A request is read for a query, mutation, or subscription document, either in a JSON
+    body alongside an operation name or variables, in a raw application/graphql body, or in
+    a query string parameter. Only the operation's type, its name, and the names of its
+    variables are reported: what it actually asks for, and any literal value its document
+    carries, is never printed.
+    """
+    recorded = _load_capture(capture)
+    keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
+    operations = find_graphql_operations(recorded, keep=keep)
+    if as_json:
+        typer.echo(operations.as_json())
+        return
+    typer.echo(render_graphql(operations, explain=explain), nl=False)
 
 
 @app.command()
