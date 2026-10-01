@@ -39,11 +39,14 @@ list of results. A single capture can be read for the values a
 later request took from an earlier response, those links can be read as a dependency
 graph showing what each request waits for, and a Python client can be compiled from that
 graph which reads those values back out of the responses instead of replaying them. A
-sanitized capture can be replayed over the network, sending each request with the
-secrets redaction removed supplied explicitly rather than read from the environment. The
-`verify` command runs that replay end to end and compares each response against what the
-browser observed by structure rather than by value, since a live server is expected to
-hand out a fresh identifier or timestamp on every run. The same check can be written out
+sanitized capture can be replayed over the network, sending each request with the secrets
+redaction removed supplied explicitly rather than read from the environment, except where
+a flow traces one to an earlier response in the same replay, such as a session cookie a
+login step sets or a CSRF token it hands back: that value is read live from the response
+instead of asked for in advance. The `verify` command runs that replay end to end and
+compares each response against what the browser observed by structure rather than by
+value, since a live server is expected to hand out a fresh identifier or timestamp on
+every run. The same check can be written out
 as a Pytest module with `test`, which rereads the capture and reruns the comparison each
 time it is invoked, so a workflow can be watched for regressions from a test suite rather
 than by running the command by hand. A single capture can also be read for the GraphQL
@@ -1013,11 +1016,14 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
 - A recorded session runs in a throwaway browser profile. The workflow starts signed out,
   and no cookie jar, history, or cache is left behind on disk.
 - Replaying a capture never reads a secret from the process environment. Every value
-  redaction removed is supplied to the replay engine explicitly, by the same name a
-  generated client would read it under, and a request needing one that was not supplied is
-  refused before anything is sent. The response a replay actually receives is not
-  redacted by the engine itself, the same as a live recording is not: it must pass through
-  `redact_capture` before it is stored, displayed, or compared.
+  redaction removed is either supplied to the replay engine explicitly, by the same name a
+  generated client would read it under, or read live out of an earlier response in the
+  same replay where a flow traced it there, such as a session cookie a login step sets or
+  a CSRF token it hands back. A value read live is held only in memory for the rest of the
+  replay and is never written anywhere. A request needing a value that is neither supplied
+  nor read live is refused before it is sent. The response a replay actually receives is
+  not redacted by the engine itself, the same as a live recording is not: it must pass
+  through `redact_capture` before it is stored, displayed, or compared.
 - Analysis runs on the local machine. No capture is uploaded.
 - This repository contains only synthetic or deliberately public test material. Real
   captures, cookies, tokens, browser profiles, and `.env` files are excluded by
@@ -1123,7 +1129,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-022 | Detect common cursor, offset, and page number pagination. | Done | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Done | T2A-004 |
-| T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Ready | T2A-015, T2A-003 |
+| T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Done | T2A-015, T2A-003 |
 | T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
 
 ### Phase 6: Public release quality
@@ -1368,6 +1374,7 @@ GraphQL endpoint, for the commands that read what a request names rather than wh
 
 ## Recent Progress
 
+- 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
 - 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
 - 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
 - 2026-09-27 - Added `trace2api test`, which writes a capture's verify check out as a Pytest module that rereads the capture and reruns the comparison each time it is invoked.
@@ -1381,7 +1388,6 @@ GraphQL endpoint, for the commands that read what a request names rather than wh
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 - 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
-- 2026-09-12 - Added `trace2api summary`, which counts what a capture holds without naming a path or a payload, and reports the same breakdown at the end of a recording.
 
 ## License
 
