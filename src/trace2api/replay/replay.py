@@ -9,8 +9,21 @@ replay would do could not tell without reading the process environment itself.
 ``secrets`` is instead handed to :func:`replay_capture` directly, keyed the same way a
 generated client's exports are: by the environment variable name
 :func:`trace2api.generate.secrets.bind_secrets` would bind each removed value to. Every
-value a kept request needs is checked before anything is sent, so a replay never sends
-part of a workflow and stalls on a missing credential halfway through it.
+value a kept request needs and cannot read live, as described below, is checked before
+anything is sent, so a replay never sends part of a workflow and stalls on a missing
+credential halfway through it.
+
+Not every credential has to come from ``secrets``. Where a value the trace recognizes as
+flowing from one response into a later request is a credential, such as a session cookie
+a login step sets or a CSRF token it hands back, a replay reads the real value out of the
+live response it just received instead of asking for it up front: the token a captured
+login handed out is not the one a live login will, so asking for the old one supplied in
+advance would only replay a session that has already ended. The value is never written
+anywhere; it is held in memory for the rest of the replay and substituted the same way an
+explicitly supplied secret is. A credential ``secrets`` does supply is used as given,
+taking precedence over one a live response could otherwise provide. A credential neither
+``secrets`` supplies nor an earlier response in the same replay hands out still has to be
+asked for, and still stops the replay before the request that needs it is sent.
 
 Like the HAR importer and the browser recorder, this module does not redact what it
 observes. The responses it returns can carry whatever the server actually sent back,
@@ -33,6 +46,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterable, Mapping
 from enum import StrEnum
+from typing import NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
@@ -141,42 +155,133 @@ def replay_capture(
         for item in classify_capture(sanitized.capture).classifications
     }
     entries = [entry for entry in sanitized.capture.entries if verdicts[entry.id] in kept]
-    resolve = _resolver(bindings, secrets)
-    _check_secrets(entries, bindings, secrets)
+    sources = _credential_sources(entries)
+    live_values: dict[str, str] = {}
+    resolve = _resolver(bindings, secrets, live_values)
+    _check_secrets(entries, bindings, secrets, sources)
 
     owns_client = client is None
     active = client if client is not None else httpx.Client(follow_redirects=False)
     try:
-        replayed = [
-            _replay_entry(active, entry, position, resolve)
-            for position, entry in enumerate(entries, start=1)
-        ]
+        replayed: list[ReplayedEntry] = []
+        for position, entry in enumerate(entries, start=1):
+            replayed_entry = _replay_entry(active, entry, position, resolve)
+            replayed.append(replayed_entry)
+            _record_live_values(replayed_entry, sources, live_values)
     finally:
         if owns_client:
             active.close()
     return ReplayResult(entries=replayed, captured=len(sanitized.capture))
 
 
-def _resolver(bindings: SecretBindings, secrets: Mapping[str, str]) -> Callable[[str], str]:
-    """Return a function from a redaction fingerprint to the value supplied for it."""
+class _CredentialSource(NamedTuple):
+    """Where a flow traced a credential to, among the entries a replay sends."""
+
+    position: int
+    location: str
+
+
+def _credential_sources(entries: list[Entry]) -> dict[str, _CredentialSource]:
+    """Map each credential fingerprint to the earlier response a flow traced it from.
+
+    Traced over the same entries and order a replay sends, so a fingerprint found here
+    names a response the replay itself will receive live. Nothing else is: a credential
+    supplied from elsewhere, or one no response in this replay hands out, is not read
+    here and still has to be supplied.
+    """
+    # Imported here rather than at module level: trace2api.analyze imports trace2api.replay
+    # itself for verification, and importing the two packages into each other at the top
+    # would make which one loads first decide whether either can be imported at all.
+    from trace2api.analyze.flow import trace_value_flows
+
+    sources: dict[str, _CredentialSource] = {}
+    for flow in trace_value_flows(entries):
+        fingerprint = _only_fingerprint(flow.value)
+        if fingerprint is not None and fingerprint not in sources:
+            sources[fingerprint] = _CredentialSource(flow.source.position, flow.source.location)
+    return sources
+
+
+def _only_fingerprint(value: str) -> str | None:
+    """Return the fingerprint ``value`` is exactly a redaction placeholder for.
+
+    ``None`` where ``value`` is not a credential, or is one sitting inside a longer piece
+    of text: a value read live has to come from a place the response addresses on its
+    own, not from splicing a fragment out of something larger.
+    """
+    segments = split_secrets(value)
+    if len(segments) == 1 and segments[0].is_secret:
+        return segments[0].fingerprint
+    return None
+
+
+def _record_live_values(
+    replayed: ReplayedEntry, sources: dict[str, _CredentialSource], live_values: dict[str, str]
+) -> None:
+    """Read any credential a later request needs out of a response just received live.
+
+    Nothing read here is written anywhere: it is held only in ``live_values``, for the
+    rest of this replay to substitute into the requests that need it.
+    """
+    if replayed.outcome is not ReplayOutcome.RESPONDED or replayed.response is None:
+        return
+    needed = [
+        (fingerprint, source.location)
+        for fingerprint, source in sources.items()
+        if source.position == replayed.position and fingerprint not in live_values
+    ]
+    if not needed:
+        return
+    from trace2api.analyze.flow import response_values
+
+    located = dict(response_values(replayed.response))
+    for fingerprint, location in needed:
+        value = located.get(location)
+        if value:
+            live_values[fingerprint] = value
+
+
+def _resolver(
+    bindings: SecretBindings, secrets: Mapping[str, str], live_values: dict[str, str]
+) -> Callable[[str], str]:
+    """Return a function from a redaction fingerprint to the value supplied or observed for it.
+
+    A value ``secrets`` supplies for a fingerprint is used as given. Otherwise, a
+    fingerprint a flow traced to an earlier response in this same replay is read from
+    ``live_values``, filled in as each response arrives.
+    """
 
     def resolve(fingerprint: str) -> str:
-        return secrets[bindings.variable_for(fingerprint)]
+        variable = bindings.variable_for(fingerprint)
+        if variable in secrets:
+            return secrets[variable]
+        if fingerprint in live_values:
+            return live_values[fingerprint]
+        raise MissingSecretError(variable, _binding_location(bindings, fingerprint, variable))
 
     return resolve
 
 
+def _binding_location(bindings: SecretBindings, fingerprint: str, variable: str) -> str:
+    """Return where a fingerprint was first observed, falling back to its variable name."""
+    binding = next((b for b in bindings if b.fingerprint == fingerprint), None)
+    return binding.location if binding is not None else variable
+
+
 def _check_secrets(
-    entries: list[Entry], bindings: SecretBindings, secrets: Mapping[str, str]
+    entries: list[Entry],
+    bindings: SecretBindings,
+    secrets: Mapping[str, str],
+    sources: dict[str, _CredentialSource],
 ) -> None:
-    """Raise :class:`MissingSecretError` for the first request needing a secret not supplied."""
+    """Raise :class:`MissingSecretError` for the first request needing a secret that is
+    neither supplied nor traced to an earlier response among the entries replayed."""
     for entry in entries:
         for fingerprint in _fingerprints(entry.request):
             variable = bindings.variable_for(fingerprint)
-            if variable not in secrets:
-                binding = next((b for b in bindings if b.fingerprint == fingerprint), None)
-                location = binding.location if binding is not None else variable
-                raise MissingSecretError(variable, location)
+            if variable in secrets or fingerprint in sources:
+                continue
+            raise MissingSecretError(variable, _binding_location(bindings, fingerprint, variable))
 
 
 def _fingerprints(request: Request) -> set[str]:

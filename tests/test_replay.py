@@ -251,6 +251,154 @@ def test_resolves_a_secret_into_a_form_encoded_body_field() -> None:
     }
 
 
+# Auth and CSRF dependencies read live
+
+
+CAPTURED_SESSION = "captured-session-not-a-real-credential"
+LIVE_SESSION = "live-session-not-a-real-credential"
+CAPTURED_CSRF = "captured-csrf-not-a-real-credential"
+LIVE_CSRF = "live-csrf-not-a-real-credential"
+
+
+def responding(
+    entry_id: str,
+    url: str,
+    *,
+    method: str = "GET",
+    response_headers: list[tuple[str, str]] | None = None,
+    response_body: Body | None = None,
+) -> Entry:
+    """Build an exchange whose response carries a value a later request may depend on."""
+    return Entry(
+        id=entry_id,
+        started_at=STARTED_AT,
+        request=Request(method=method, url=url, headers=Headers(), body=None),
+        response=Response(
+            status=200,
+            headers=Headers.from_pairs(response_headers or []),
+            body=response_body or Body(mime_type="application/json"),
+        ),
+        resource_type=ResourceType.XHR,
+    )
+
+
+def test_a_session_cookie_from_an_earlier_response_is_read_live_not_supplied() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/login":
+            return httpx.Response(
+                200, headers=[("Set-Cookie", f"session={LIVE_SESSION}; Path=/")], json={"ok": True}
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    result, sent = replay_against(
+        handle,
+        capture(
+            responding(
+                "a",
+                "https://shop.example.com/api/login",
+                method="POST",
+                response_headers=[("Set-Cookie", f"session={CAPTURED_SESSION}; Path=/")],
+            ),
+            entry(
+                "b",
+                "https://shop.example.com/api/orders",
+                headers=[("Cookie", f"session={CAPTURED_SESSION}")],
+            ),
+        ),
+    )
+    assert sent[1].headers["cookie"] == f"session={LIVE_SESSION}"
+    assert CAPTURED_SESSION not in sent[1].headers["cookie"]
+    assert [item.outcome for item in result.entries] == [ReplayOutcome.RESPONDED] * 2
+
+
+def test_a_csrf_token_handed_out_in_a_json_field_is_read_live() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/csrf":
+            return httpx.Response(200, json={"csrfToken": LIVE_CSRF})
+        return httpx.Response(200, json={"ok": True})
+
+    _, sent = replay_against(
+        handle,
+        capture(
+            responding(
+                "a",
+                "https://shop.example.com/api/csrf",
+                response_body=Body(
+                    mime_type="application/json", text=f'{{"csrfToken":"{CAPTURED_CSRF}"}}'
+                ),
+            ),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("X-CSRF-Token", CAPTURED_CSRF)],
+            ),
+        ),
+    )
+    assert sent[1].headers["x-csrf-token"] == LIVE_CSRF
+
+
+def test_a_supplied_secret_still_wins_over_a_value_read_live() -> None:
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/login":
+            return httpx.Response(
+                200, headers=[("Set-Cookie", f"session={LIVE_SESSION}; Path=/")], json={"ok": True}
+            )
+        return httpx.Response(200, json={"ok": True})
+
+    _, sent = replay_against(
+        handle,
+        capture(
+            responding(
+                "a",
+                "https://shop.example.com/api/login",
+                method="POST",
+                response_headers=[("Set-Cookie", f"session={CAPTURED_SESSION}; Path=/")],
+            ),
+            entry(
+                "b",
+                "https://shop.example.com/api/orders",
+                headers=[("Cookie", f"session={CAPTURED_SESSION}")],
+            ),
+        ),
+        {"TRACE2API_COOKIE_SESSION": "explicitly-supplied-value"},
+    )
+    assert sent[1].headers["cookie"] == "session=explicitly-supplied-value"
+
+
+def test_a_credential_missing_from_the_live_response_raises_once_it_is_needed() -> None:
+    sent: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        # The live login answers without the cookie the capture observed.
+        return httpx.Response(200, json={"ok": True})
+
+    with (
+        pytest.raises(MissingSecretError, match="TRACE2API_COOKIE_SESSION"),
+        httpx.Client(transport=httpx.MockTransport(handle)) as client,
+    ):
+        replay_capture(
+            capture(
+                responding(
+                    "a",
+                    "https://shop.example.com/api/login",
+                    method="POST",
+                    response_headers=[("Set-Cookie", f"session={CAPTURED_SESSION}; Path=/")],
+                ),
+                entry(
+                    "b",
+                    "https://shop.example.com/api/orders",
+                    headers=[("Cookie", f"session={CAPTURED_SESSION}")],
+                ),
+            ),
+            {},
+            client=client,
+        )
+    # The login step was sent before the second request's missing dependency was found.
+    assert len(sent) == 1
+
+
 def test_a_binary_body_is_sent_as_observed() -> None:
     raw = b"\x00\x01binary"
     body = Body(
