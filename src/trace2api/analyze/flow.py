@@ -69,8 +69,10 @@ __all__ = [
     "ValueFlow",
     "flow_reason",
     "render_flows",
+    "response_values",
     "standalone_index",
     "trace_flows",
+    "trace_value_flows",
 ]
 
 
@@ -213,6 +215,29 @@ def trace_flows(
         flows=_trace(traced),
         redacted_values=len(sanitized.report),
     )
+
+
+def trace_value_flows(entries: Sequence[Entry]) -> list[ValueFlow]:
+    """Trace the links ``entries`` carry from one response into a later request.
+
+    Unlike :func:`trace_flows`, this reads ``entries`` exactly as given: numbered from one
+    in the order supplied, with no redaction and no relevance filtering. A caller that has
+    already sanitized and selected the entries it means to trace, such as a replay choosing
+    which values it can read live instead of asking for them, supplies that same sequence
+    here so the positions line up with its own.
+    """
+    positioned = [_Positioned(position, entry) for position, entry in enumerate(entries, start=1)]
+    return _trace(positioned)
+
+
+def response_values(response: Response) -> tuple[tuple[str, str], ...]:
+    """Return every value ``response`` carries, located the way a flow link's source is.
+
+    A caller holding a response a flow was not traced from, such as the live response a
+    replay just received, uses this to read the value out of it at the same location a
+    traced link named, without needing to know how any location is shaped.
+    """
+    return tuple((located.location, located.value) for located in _response_values(response))
 
 
 def _traced_request(item: _Positioned) -> TracedRequest:
