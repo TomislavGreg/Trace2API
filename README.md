@@ -922,6 +922,12 @@ was recorded.
 - Value classification over two recordings, deciding for each observed value whether it is
   a constant, an input, a generated value, a secret, or unknown, by narrow rules that each
   report what they matched on.
+- A naming provider interface, `trace2api.analyze.suggest_unknowns`, that a second opinion
+  on a value classification left unknown can plug into without classification itself
+  depending on it: a provider is asked only about values already classified as unknown, and
+  nothing it returns can change a verdict. No provider ships; the interface is exercised in
+  tests with a stand-in, and classification runs exactly as deterministically whether or
+  not one is ever wired in.
 - Dependency detection over one recording, finding the values a workflow took from an
   earlier response and sent again: JSON and form fields, response headers, the cookie in a
   `Set-Cookie` field, and a redirect target, matched either whole or as a value standing on
@@ -1130,7 +1136,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-022 | Detect common cursor, offset, and page number pagination. | Done | T2A-013 |
 | T2A-023 | Understand GraphQL requests and operation names. | Done | T2A-004 |
 | T2A-024 | Handle common auth and CSRF dependencies without exposing secrets. | Done | T2A-015, T2A-003 |
-| T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Ready | T2A-014 |
+| T2A-025 | Optional model provider interface for ambiguous naming or explanation. Deterministic operation must remain available. | Done | T2A-014 |
 
 ### Phase 6: Public release quality
 
@@ -1185,6 +1191,7 @@ src/trace2api/
         flow.py
         graph.py
         graphql.py
+        naming.py
         pagination.py
         relevance.py
         summary.py
@@ -1374,6 +1381,7 @@ GraphQL endpoint, for the commands that read what a request names rather than wh
 
 ## Recent Progress
 
+- 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
 - 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
 - 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
 - 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
@@ -1387,7 +1395,6 @@ GraphQL endpoint, for the commands that read what a request names rather than wh
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 - 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
-- 2026-09-13 - Added `trace2api diff`, which compares two recordings of one workflow and reports which request values changed, with a second synthetic archive to run it against.
 
 ## License
 
