@@ -60,6 +60,12 @@ from trace2api.analyze.graphql import (
     find_graphql_operations,
     render_graphql,
 )
+from trace2api.analyze.naming import (
+    NamingProvider,
+    NamingSuggestion,
+    render_suggestions,
+    suggest_unknowns,
+)
 from trace2api.analyze.pagination import (
     PaginatedRequest,
     PaginatedValue,
@@ -130,6 +136,8 @@ __all__ = [
     "GraphQLRule",
     "Mismatch",
     "MismatchKind",
+    "NamingProvider",
+    "NamingSuggestion",
     "OperationType",
     "PaginatedRequest",
     "PaginatedValue",
@@ -167,8 +175,10 @@ __all__ = [
     "render_graph",
     "render_graphql",
     "render_pagination",
+    "render_suggestions",
     "render_summary",
     "render_verification",
+    "suggest_unknowns",
     "summarize_capture",
     "trace_flows",
     "verify_capture",
