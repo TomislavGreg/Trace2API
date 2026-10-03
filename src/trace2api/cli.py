@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -40,6 +41,7 @@ from trace2api.capture import (
     record_session,
     save_capture,
 )
+from trace2api.demo import serve_demo_app
 from trace2api.generate import (
     compile_python,
     generate_curl,
@@ -152,6 +154,54 @@ def record(
     except CaptureFileError as error:
         _fail(str(error))
     typer.echo(_recording_summary(saved), nl=False)
+
+
+@app.command()
+def demo(
+    port: Annotated[
+        int,
+        typer.Option("--port", help="Port to listen on. 0 picks one that is free."),
+    ] = 0,
+    seed: Annotated[
+        int,
+        typer.Option(
+            "--seed",
+            help=(
+                "Changes the CSRF token and confirmation reference the app hands out, "
+                "the way a new signed-in session would."
+            ),
+        ),
+    ] = 0,
+    timeout: Annotated[
+        float | None,
+        typer.Option(
+            "--timeout",
+            metavar="SECONDS",
+            help="Stop serving after this long instead of running until interrupted.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Serve the local storefront that record and replay can be tried against.
+
+    The app holds a small, fixed set of orders in memory and performs no network calls
+    of its own, so it starts instantly and leaves nothing behind once it stops. Point a
+    browser at the printed address and run ``trace2api record`` against it to capture
+    the workflow, or feed a capture already recorded from it to ``verify``.
+    """
+    if timeout is not None and timeout <= 0:
+        raise typer.BadParameter("--timeout must be greater than zero.")
+    with serve_demo_app(seed=seed, port=port) as base_url:
+        typer.echo(f"Serving the demo app at {base_url}")
+        typer.echo(f"Try: trace2api record {base_url}/orders")
+        try:
+            if timeout is None:
+                while True:
+                    time.sleep(3600)
+            else:
+                time.sleep(timeout)
+        except KeyboardInterrupt:
+            pass
 
 
 def _recording_summary(saved: SavedCapture) -> str:

@@ -1368,6 +1368,19 @@ class TestRecordCommand:
         assert runner.invoke(app, ["record"]).exit_code != 0
 
 
+class TestDemoCommand:
+    def test_serves_until_the_timeout_and_prints_the_address(self) -> None:
+        result = runner.invoke(app, ["demo", "--timeout", "0.05"])
+
+        assert result.exit_code == 0
+        assert "Serving the demo app at http://127.0.0.1:" in result.stdout
+        assert "trace2api record http://127.0.0.1:" in result.stdout
+
+    def test_a_timeout_that_is_not_positive_is_refused(self) -> None:
+        result = runner.invoke(app, ["demo", "--timeout", "0"])
+        assert result.exit_code != 0
+
+
 class TestSavedCaptureInput:
     def test_inspect_reads_a_saved_capture(self, tmp_path: Path) -> None:
         capture_file = saved_capture(
