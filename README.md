@@ -889,6 +889,17 @@ was recorded.
   `examples/storefront-orders-second-run.har`, that the quick start above runs against.
   They record the same storefront workflow with different inputs, which is what the
   comparison needs.
+- `trace2api demo` serves a small deterministic order workflow in memory for the rest of
+  the project to run against something real and local rather than only hand written
+  archives: an orders page, a listing with status and page filtering, an order's detail,
+  and a confirmation guarded by a bearer token and a CSRF token the listing page hands
+  out. `--seed` changes the CSRF token and confirmation reference the app hands out the
+  way a new signed-in session would, `--port` picks a fixed port instead of a free one,
+  and `--timeout` stops it after a bound instead of running until interrupted.
+- Two more captures, `examples/demo-app.har` and `examples/demo-app-second-run.har`,
+  recorded from `trace2api demo` itself with `trace2api.demo.perform_demo_workflow`
+  rather than written by hand, so every request and response in them is one the app
+  actually answered and the pair can be regenerated against a freshly started instance.
 - A browser recorder that watches a live session through Playwright and records every
   http and https exchange it performs, with the response payloads of the requests the
   analysis reads, the durations the browser measured, and the requests that failed or
@@ -1142,8 +1153,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
-| T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Ready | T2A-011 |
-| T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Backlog | T2A-026, T2A-017 |
+| T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Done | T2A-011 |
+| T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Ready | T2A-026, T2A-017 |
 | T2A-028 | README end to end demo using verified real output. | Backlog | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Backlog | T2A-001 |
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Backlog | T2A-028, T2A-029 |
@@ -1214,6 +1225,9 @@ src/trace2api/
         redact.py
     replay/
         replay.py
+    demo/
+        app.py
+        fixture.py
 examples/
 tests/
 ```
@@ -1374,13 +1388,27 @@ redacted, since the engine deliberately leaves that to its caller, and hands eac
 `compare_responses`. A request the capture never observed a response for has nothing to
 compare against and is reported as such rather than skipped or scored as a pass.
 
+`demo/` is a small order workflow app the rest of the project can run against, standing
+in for the storefront the hand written archives describe. `app.py` serves it: a fixed,
+in memory set of orders behind a bearer token, a CSRF token the orders page hands out and
+confirming an order checks, and status and page filtering on the listing, none of it
+random or clock dependent, so the same seed always hands out the same token and
+confirmation reference. `fixture.py` drives a running instance through that workflow with
+real requests and writes down what it actually answered as a HAR document, so a capture
+taken from it can be regenerated and checked rather than taken on faith the way a hand
+written archive has to be.
+
 `examples/` holds synthetic archives written for this repository. They contain no real
 host, credential, or personal data, and the tests read them so the output shown above
 stays true. `storefront-graphql.har` is a second workflow, sent as two requests to one
 GraphQL endpoint, for the commands that read what a request names rather than where it went.
+`demo-app.har` and `demo-app-second-run.har` are recorded from `demo/` itself rather than
+written by hand, with `trace2api demo` and `trace2api.demo.perform_demo_workflow` behind
+them.
 
 ## Recent Progress
 
+- 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
 - 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
 - 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
@@ -1394,7 +1422,6 @@ GraphQL endpoint, for the commands that read what a request names rather than wh
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 - 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
-- 2026-09-14 - Added `trace2api classify`, which says whether each value of a workflow is a constant, an input, generated per request, a secret, or unrecognized, with the rule behind every verdict.
 
 ## License
 
