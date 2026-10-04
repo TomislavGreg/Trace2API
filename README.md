@@ -900,6 +900,14 @@ was recorded.
   recorded from `trace2api demo` itself with `trace2api.demo.perform_demo_workflow`
   rather than written by hand, so every request and response in them is one the app
   actually answered and the pair can be regenerated against a freshly started instance.
+- `trace2api benchmark` runs the demo workflow two ways against one freshly started
+  instance of the demo app: once as the browser flow performs it, and once as the Python
+  client `compile_python` writes from what that run recorded. It reports whether the two
+  sent the same number of requests, how many of them the dependency graph says cannot be
+  sent at once, whether every response the direct client received matched the browser
+  flow's, and how long each took, with elapsed time reported as a measurement of this run
+  rather than a claim about either approach. `--seed` picks which instance of the demo app
+  both flows run against, and `--json` writes the same report as a JSON document.
 - A browser recorder that watches a live session through Playwright and records every
   http and https exchange it performs, with the response payloads of the requests the
   analysis reads, the durations the browser measured, and the requests that failed or
@@ -1154,8 +1162,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | Ticket | Description | Status | Depends on |
 | --- | --- | --- | --- |
 | T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Done | T2A-011 |
-| T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Ready | T2A-026, T2A-017 |
-| T2A-028 | README end to end demo using verified real output. | Backlog | T2A-027, T2A-020 |
+| T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Done | T2A-026, T2A-017 |
+| T2A-028 | README end to end demo using verified real output. | Ready | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Backlog | T2A-001 |
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Backlog | T2A-028, T2A-029 |
 
@@ -1193,6 +1201,7 @@ Layout:
 src/trace2api/
     __init__.py
     __main__.py
+    benchmark.py
     cli.py
     inspection.py
     models.py
@@ -1398,6 +1407,15 @@ real requests and writes down what it actually answered as a HAR document, so a 
 taken from it can be regenerated and checked rather than taken on faith the way a hand
 written archive has to be.
 
+`benchmark.py` runs the demo workflow against `demo/` twice and compares the two runs: once
+as `perform_demo_workflow` performs it, standing in for the browser, and once as the module
+`compile_python` writes from what that run recorded, executed for real with `exec` against a
+fresh `httpx.Client`. Running both against one freshly started instance is what keeps the
+comparison reproducible without recording anything in advance. What it reports as a finding
+is request counts and response equality, since a difference there is a defect; elapsed time
+is reported alongside them but named as a measurement of one run on one machine, not a
+claim, because both flows send the same requests to the same local process.
+
 `examples/` holds synthetic archives written for this repository. They contain no real
 host, credential, or personal data, and the tests read them so the output shown above
 stays true. `storefront-graphql.har` is a second workflow, sent as two requests to one
@@ -1408,6 +1426,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
 - 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
 - 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
@@ -1421,7 +1440,6 @@ them.
 - 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 - 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
-- 2026-09-15 - Added `trace2api flow`, which reads one capture and reports the values a request took from an earlier response, such as an identifier that became a path segment or a cookie sent back in a header.
 
 ## License
 
