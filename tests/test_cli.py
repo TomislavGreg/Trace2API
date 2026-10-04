@@ -55,6 +55,7 @@ def test_help_lists_the_commands() -> None:
     output = _unwrapped(runner.invoke(app, ["--help"]).output)
     assert "version" in output
     assert "record" in output
+    assert "benchmark" in output
     assert "summary" in output
     assert "inspect" in output
     assert "diff" in output
@@ -1379,6 +1380,22 @@ class TestDemoCommand:
     def test_a_timeout_that_is_not_positive_is_refused(self) -> None:
         result = runner.invoke(app, ["demo", "--timeout", "0"])
         assert result.exit_code != 0
+
+
+class TestBenchmarkCommand:
+    def test_compares_the_browser_flow_and_the_direct_client(self) -> None:
+        result = runner.invoke(app, ["benchmark"])
+        assert result.exit_code == 0
+        assert "Browser flow" in result.stdout
+        assert "Direct client" in result.stdout
+        assert "matched the browser flow" in result.stdout
+
+    def test_json_writes_the_same_report(self) -> None:
+        result = runner.invoke(app, ["benchmark", "--seed", "3", "--json"])
+        assert result.exit_code == 0
+        report = json.loads(result.stdout)
+        assert report["seed"] == 3
+        assert report["responses_match"] is True
 
 
 class TestSavedCaptureInput:

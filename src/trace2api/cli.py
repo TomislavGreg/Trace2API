@@ -32,6 +32,7 @@ from trace2api.analyze import (
     trace_flows,
     verify_capture,
 )
+from trace2api.benchmark import render_benchmark, run_benchmark
 from trace2api.capture import (
     BrowserCaptureError,
     CaptureFileError,
@@ -202,6 +203,38 @@ def demo(
                 time.sleep(timeout)
         except KeyboardInterrupt:
             pass
+
+
+@app.command()
+def benchmark(
+    seed: Annotated[
+        int,
+        typer.Option(
+            "--seed",
+            help="Seeds the demo app instance both flows run against.",
+        ),
+    ] = 0,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Write the report as JSON instead of text."),
+    ] = False,
+) -> None:
+    """Run the demo workflow as a browser flow and as a compiled direct client, compared.
+
+    Both runs start a fresh instance of the demo app and perform the same order workflow
+    against it: once the way the browser flow performs it, and once as the Python client
+    compiled from what that run recorded. Nothing is read from disk and nothing leaves this
+    machine, so the comparison needs no capture recorded in advance.
+
+    Request counts and responses are compared because a difference there is a defect.
+    Elapsed time is reported alongside them, but both flows send the same requests to the
+    same local process, so it is not a claim about either approach being faster.
+    """
+    report = run_benchmark(seed=seed)
+    if as_json:
+        typer.echo(report.as_json())
+        return
+    typer.echo(render_benchmark(report), nl=False)
 
 
 def _recording_summary(saved: SavedCapture) -> str:
