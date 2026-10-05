@@ -748,6 +748,109 @@ With every credential exported, the same test replays the workflow and asserts t
 every response it gets back still matches the shape `verify` observed when the capture
 was recorded.
 
+Every `verify` and `test` run above was illustrative: `examples/storefront-orders.har`
+is a synthetic archive, and nothing answers at `shop.example.com` to replay it against.
+`trace2api demo` closes that gap with a small local app the rest of the loop can run
+against for real:
+
+```console
+$ trace2api demo --port 8000 &
+Serving the demo app at http://127.0.0.1:8000
+Try: trace2api record http://127.0.0.1:8000/orders
+```
+
+The orders page it serves is a static shell with nothing for a browser to click, so
+there is no interactive session to record from it. The capture below is driven
+directly against the running instance instead, the same way the `demo-app.har` fixture
+under `examples/` was recorded, with `trace2api.demo.perform_demo_workflow`:
+
+```console
+$ python -c "
+import json
+from trace2api.demo import perform_demo_workflow
+
+with open('demo.har', 'w') as handle:
+    json.dump(perform_demo_workflow('http://127.0.0.1:8000'), handle)
+"
+```
+
+```console
+$ trace2api inspect demo.har
+Capture: 4 requests from har, recorded 2026-09-01T09:00:00+00:00
+Hosts: 127.0.0.1
+
+#  METHOD  HOST       PATH                         STATUS  TYPE      RELEVANCE
+1  GET     127.0.0.1  /orders                      200     document  unknown
+2  GET     127.0.0.1  /api/v1/orders               200     xhr       application
+3  GET     127.0.0.1  /api/v1/orders/4711          200     xhr       application
+4  POST    127.0.0.1  /api/v1/orders/4711/confirm  201     fetch     application
+
+Showing 4 of 4 requests: 3 application, 1 unknown, 0 noise.
+Redacted 8 values before displaying this.
+```
+
+Compiling it shows a case `--explain` elsewhere only describes: a value that came from
+an earlier response but is also a credential, which `compile` replays from the
+environment rather than reads back, since redaction removed the value a link needs to
+confirm where it sits:
+
+```console
+$ trace2api compile demo.har > demo_client.py
+$ head -24 demo_client.py
+"""Direct client for a workflow recorded 2026-09-01T09:00:00+00:00 (source: har).
+
+Reproducing 4 of 4 captured requests.
+Left out (httpx sets it from the request it sends): content-length.
+
+The workflow runs in 3 stages: 3 of 4 requests wait for an earlier response.
+
+1 value read from a response as the client runs, rather than replayed as observed:
+  orders_id  2  response.body.orders[0].id  sent on by 3, 4
+
+4 values the workflow took from a response are replayed as observed:
+  2 request.headers.cookie <- 1 response.headers.set-cookie[csrf]
+    the value is a credential the client is given from the environment instead
+  3 request.headers.cookie <- 1 response.headers.set-cookie[csrf]
+    the value is a credential the client is given from the environment instead
+  4 request.headers.x-csrf-token <- 1 response.headers.set-cookie[csrf]
+    the value is a credential the client is given from the environment instead
+  4 request.headers.cookie <- 1 response.headers.set-cookie[csrf]
+    the value is a credential the client is given from the environment instead
+
+Credentials were removed from the capture. Export them before running:
+  TRACE2API_AUTHORIZATION  request.headers.authorization
+  TRACE2API_COOKIE_CSRF    request.headers.cookie[csrf]
+"""
+```
+
+`verify` is not under that limit, because it is not a static file but a replay running
+against the same instance that issued the cookie: it reads the CSRF value live from the
+first response in that same run, the dependency `trace2api flow` would name, rather
+than asking for it in advance. Only the bearer token needs supplying, and the demo app
+accepts one fixed, synthetic value:
+
+```console
+$ export TRACE2API_AUTHORIZATION=demo-access-token-not-a-real-credential
+$ trace2api verify demo.har
+Capture: 4 requests from har, recorded 2026-09-01T09:00:00+00:00
+Replayed 4 kept requests and compared each response with what was observed.
+
+1  GET   127.0.0.1/orders  matched
+
+2  GET   127.0.0.1/api/v1/orders  matched
+
+3  GET   127.0.0.1/api/v1/orders/4711  matched
+
+4  POST  127.0.0.1/api/v1/orders/4711/confirm  matched
+
+4 requests replayed: 4 matched.
+Redacted 16 values before comparing, using one salt for the requests and another for the replayed responses.
+```
+
+Four requests, four matches, against a server that was actually sent them. The same
+comparison, automated against a freshly started instance on every run instead of a
+capture taken once, is what `trace2api benchmark` reports.
+
 ## Current Capabilities
 
 - Installable `trace2api` package with a `src/` layout.
@@ -1163,7 +1266,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | --- | --- | --- | --- |
 | T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Done | T2A-011 |
 | T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Done | T2A-026, T2A-017 |
-| T2A-028 | README end to end demo using verified real output. | Ready | T2A-027, T2A-020 |
+| T2A-028 | README end to end demo using verified real output. | Done | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Backlog | T2A-001 |
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Backlog | T2A-028, T2A-029 |
 
@@ -1426,6 +1529,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-05 - The quick start now runs `inspect`, `compile`, and `verify` against a live `trace2api demo` instance, replacing the illustrative example with a capture actually replayed and matched.
 - 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
 - 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
@@ -1439,7 +1543,6 @@ them.
 - 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
 - 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
 - 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
-- 2026-09-16 - Added `trace2api graph`, which reads the links of a capture as a dependency graph: what a client can send at once, what waits for a response, which responses it has to read, and the chain of round trips it cannot avoid.
 
 ## License
 
