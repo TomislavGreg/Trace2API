@@ -56,7 +56,27 @@ track what is real and what is planned.
 
 ## Installation
 
-Trace2API is not published to PyPI yet. Install from a clone:
+Trace2API is not published to PyPI yet. Until it is, `pipx` and `uvx` both install
+straight from the git repository, with no clone needed:
+
+```console
+$ pipx install "git+https://github.com/TomislavGreg/Trace2API.git"
+$ trace2api --help
+```
+
+```console
+$ uvx --from "git+https://github.com/TomislavGreg/Trace2API.git" trace2api --help
+```
+
+`uvx` runs the command without installing it anywhere permanent, which is the quicker way
+to try a single command. `pipx` installs it into its own isolated environment and leaves
+`trace2api` on the PATH afterward, which suits a command run repeatedly.
+
+Python 3.12 or newer is required; both tools pick an interpreter that satisfies it on
+their own.
+
+Working on Trace2API itself, or wanting the synthetic archives and demo app this README
+walks through, needs a clone instead:
 
 ```console
 $ git clone https://github.com/TomislavGreg/Trace2API.git
@@ -66,14 +86,17 @@ $ . .venv/bin/activate
 $ python -m pip install -e .
 ```
 
-Python 3.12 or newer is required.
-
-Recording a live browser session needs a browser, which the rest of the tool does not:
+Recording a live browser session needs a browser, which the rest of the tool does not.
+The `browser` extra pulls in Playwright under any of the three installation methods above,
+for example:
 
 ```console
 $ python -m pip install -e ".[browser]"
 $ playwright install chromium
 ```
+
+Running `record` without it installed names the extra to install rather than failing with
+an import error.
 
 ## Quick start
 
@@ -853,7 +876,9 @@ capture taken once, is what `trace2api benchmark` reports.
 
 ## Current Capabilities
 
-- Installable `trace2api` package with a `src/` layout.
+- Installable `trace2api` package with a `src/` layout, buildable to a wheel and an
+  sdist that carry the license, and installable directly from the git repository with
+  `pipx` or run ad hoc with `uvx`, with no PyPI release needed for either.
 - `trace2api --help` and `trace2api version`.
 - `trace2api record URL` opens a browser at `URL`, records every http and https exchange
   the session performs, and saves the result as a local capture file, reporting how many
@@ -1267,8 +1292,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-026 | Deterministic local demo app and capture fixture for the full workflow. | Done | T2A-011 |
 | T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Done | T2A-026, T2A-017 |
 | T2A-028 | README end to end demo using verified real output. | Done | T2A-027, T2A-020 |
-| T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Backlog | T2A-001 |
-| T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Backlog | T2A-028, T2A-029 |
+| T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Done | T2A-001 |
+| T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Ready | T2A-028, T2A-029 |
 
 ## Development
 
@@ -1529,6 +1554,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-06 - The package installs directly from the git repository with `pipx` or runs ad hoc with `uvx`, with no PyPI release needed for either; CI now builds the wheel and sdist on every run.
 - 2026-10-05 - The quick start now runs `inspect`, `compile`, and `verify` against a live `trace2api demo` instance, replacing the illustrative example with a capture actually replayed and matched.
 - 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
 - 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
