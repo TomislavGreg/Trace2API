@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trace2api"
-version = "0.0.1"
+version = "0.1.0"
 description = "Turn observed browser network workflows into clean, reusable direct HTTP client code."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,7 +12,7 @@ license = "Apache-2.0"
 authors = [{ name = "Tomislav Gregovic" }]
 keywords = ["har", "http", "api", "codegen", "capture", "replay"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3.12",
