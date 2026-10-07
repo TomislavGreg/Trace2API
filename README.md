@@ -879,6 +879,11 @@ capture taken once, is what `trace2api benchmark` reports.
 - Installable `trace2api` package with a `src/` layout, buildable to a wheel and an
   sdist that carry the license, and installable directly from the git repository with
   `pipx` or run ad hoc with `uvx`, with no PyPI release needed for either.
+- A versioning policy, a changelog, and a release checklist. `CHANGELOG.md` records
+  what each release changed, following Keep a Changelog and Semantic Versioning, and
+  `RELEASING.md` lists the steps a release takes: confirming `main` is healthy, bumping
+  the version in `pyproject.toml` and `src/trace2api/__init__.py`, adding the changelog
+  entry, running the full local check sequence, and tagging the released commit.
 - `trace2api --help` and `trace2api version`.
 - `trace2api record URL` opens a browser at `URL`, records every http and https exchange
   the session performs, and saves the result as a local capture file, reporting how many
@@ -1293,7 +1298,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-027 | Reproducible benchmark comparing the browser flow and direct client on the demo app. | Done | T2A-026, T2A-017 |
 | T2A-028 | README end to end demo using verified real output. | Done | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Done | T2A-001 |
-| T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Ready | T2A-028, T2A-029 |
+| T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Done | T2A-028, T2A-029 |
 
 ## Development
 
@@ -1302,6 +1307,9 @@ $ python -m venv .venv
 $ . .venv/bin/activate
 $ python -m pip install -e ".[dev]"
 ```
+
+Cutting a release follows the checklist in [RELEASING.md](RELEASING.md), and what
+changed in each one is recorded in [CHANGELOG.md](CHANGELOG.md).
 
 Run the same checks CI runs:
 
@@ -1554,6 +1562,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-07 - Added `CHANGELOG.md` and `RELEASING.md`, bumped the package to v0.1.0, and recorded T2A-030 as done, closing out the Phase 6 ticket board.
 - 2026-10-06 - The package installs directly from the git repository with `pipx` or runs ad hoc with `uvx`, with no PyPI release needed for either; CI now builds the wheel and sdist on every run.
 - 2026-10-05 - The quick start now runs `inspect`, `compile`, and `verify` against a live `trace2api demo` instance, replacing the illustrative example with a capture actually replayed and matched.
 - 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
@@ -1567,8 +1576,6 @@ them.
 - 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
 - 2026-09-22 - Added a replay engine that sends the requests of a sanitized capture over the network, with every secret redaction removed supplied explicitly instead of read from the environment.
 - 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
-- 2026-09-18 - A credential a workflow sent in a form encoded payload now reaches the request, encoded where the payload carried it, in the cURL, Python, and JavaScript clients alike.
-- 2026-09-17 - Added `trace2api compile`, which writes a Python client that reads the values a workflow depends on out of the responses that hand them out, instead of replaying the ones the recording caught.
 
 ## License
 
