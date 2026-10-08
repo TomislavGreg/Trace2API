@@ -46,6 +46,7 @@ from trace2api.generate.headers import HeaderRule, OmittedHeader
 from trace2api.generate.javascript import (
     JavaScriptCall,
     JavaScriptClient,
+    compile_javascript,
     generate_javascript,
 )
 from trace2api.generate.python import (
@@ -86,6 +87,7 @@ __all__ = [
     "SubstitutionSite",
     "UnresolvedDependency",
     "bind_secrets",
+    "compile_javascript",
     "compile_python",
     "environment_variable",
     "form_field_places",

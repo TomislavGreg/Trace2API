@@ -44,6 +44,7 @@ from trace2api.capture import (
 )
 from trace2api.demo import serve_demo_app
 from trace2api.generate import (
+    compile_javascript,
     compile_python,
     generate_curl,
     generate_javascript,
@@ -80,6 +81,17 @@ class Target(StrEnum):
     """A language a capture can be written out as. More arrive with the tickets for them."""
 
     CURL = "curl"
+    PYTHON = "python"
+    JAVASCRIPT = "javascript"
+
+
+class CompileTarget(StrEnum):
+    """A language a dependency-aware client can be compiled into.
+
+    Narrower than :class:`Target`: a cURL script has no runtime to read a value out of a
+    response with, so compiling to one is not offered.
+    """
+
     PYTHON = "python"
     JAVASCRIPT = "javascript"
 
@@ -708,6 +720,15 @@ def compile_client(
             show_default=False,
         ),
     ],
+    target: Annotated[
+        CompileTarget,
+        typer.Option(
+            "--target",
+            "-t",
+            help="Language to write the client in: a Python httpx module or a JavaScript "
+            "fetch module.",
+        ),
+    ] = CompileTarget.PYTHON,
     include_noise: Annotated[
         bool,
         typer.Option(
@@ -717,7 +738,7 @@ def compile_client(
         ),
     ] = False,
 ) -> None:
-    """Write a capture as a Python client that reads what the workflow depends on.
+    """Write a capture as a client that reads what the workflow depends on.
 
     Where generate replays every value exactly as it was recorded, compile resolves the
     links the trace found: an identifier a response handed out is read back out of that
@@ -725,12 +746,19 @@ def compile_client(
     with rather than only against the recording.
 
     A link that cannot be resolved is replayed as observed and named in the module
-    docstring with the reason, so what the client reproduces and what it repeats are both
-    readable in the output. Credentials are supplied from the environment as ever.
+    docstring or preamble with the reason, so what the client reproduces and what it
+    repeats are both readable in the output. Credentials are supplied from the environment
+    as ever. The JavaScript target also replays a value that would otherwise be read into
+    a form encoded payload, or one of several repeated headers read by position, because
+    `fetch` has no way to do either.
     """
     recorded = _load_capture(capture)
     keep = tuple(Relevance) if include_noise else DEFAULT_KEPT
-    typer.echo(compile_python(recorded, keep=keep).code, nl=False)
+    if target is CompileTarget.PYTHON:
+        code = compile_python(recorded, keep=keep).code
+    else:
+        code = compile_javascript(recorded, keep=keep).code
+    typer.echo(code, nl=False)
 
 
 @app.command()
