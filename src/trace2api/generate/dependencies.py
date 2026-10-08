@@ -485,10 +485,49 @@ def _leaf_of(body: Body, steps: Sequence[str | int]) -> str | int | float | None
 # Naming what is read
 
 
-_RESERVED = frozenset({"client", "httpx", "json", "main", "os", "response", "responses", "run"})
-"""Names the generated module already uses for something else."""
+_RESERVED = frozenset(
+    {
+        # Used by the generated Python module.
+        "client",
+        "httpx",
+        "json",
+        "main",
+        "os",
+        "response",
+        "responses",
+        "run",
+        # Used by the generated JavaScript module.
+        "console",
+        "fetch",
+        "pathToFileURL",
+        "process",
+        "requireEnv",
+        "url",
+        "URL",
+        "URLSearchParams",
+        # Reserved words in JavaScript that are not already Python keywords.
+        "enum",
+        "function",
+        "implements",
+        "instanceof",
+        "interface",
+        "let",
+        "new",
+        "package",
+        "private",
+        "protected",
+        "public",
+        "static",
+        "super",
+        "typeof",
+        "undefined",
+        "var",
+    }
+)
+"""Names a generated module, in any target language, already uses for something else."""
 
-_RESPONSE_VARIABLE = re.compile(r"response_\d+")
+_RESPONSE_VARIABLE = re.compile(r"response_?\d+")
+_URL_VARIABLE = re.compile(r"url\d+")
 _FALLBACK_NAME = "value"
 
 
@@ -529,6 +568,7 @@ class _Names:
             or keyword.iskeyword(name)
             or hasattr(builtins, name)
             or _RESPONSE_VARIABLE.fullmatch(name)
+            or _URL_VARIABLE.fullmatch(name)
         )
 
 
