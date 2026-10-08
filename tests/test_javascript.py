@@ -21,7 +21,7 @@ import pytest
 
 from trace2api.analyze import Relevance
 from trace2api.capture import load_har
-from trace2api.generate import HeaderRule, generate_javascript
+from trace2api.generate import HeaderRule, compile_javascript, generate_javascript
 from trace2api.models import (
     Body,
     Capture,
@@ -57,6 +57,28 @@ globalThis.fetch = async (input, init = {}) => {
     body: await request.text(),
   });
   return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+};
+
+const module = await import(pathToFileURL(process.argv[2]).href);
+const responses = await module.run();
+process.stdout.write(JSON.stringify({ sent, responses: responses.length }));
+"""
+
+COMPILE_HARNESS = """\
+import { pathToFileURL } from "node:url";
+
+const answers = __ANSWERS__;
+const sent = [];
+globalThis.fetch = async (input, init = {}) => {
+  const request = new Request(input, init);
+  sent.push({
+    method: request.method,
+    url: request.url,
+    headers: [...request.headers],
+    body: await request.text(),
+  });
+  const body = JSON.stringify(answers[new URL(request.url).pathname] ?? {});
+  return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
 };
 
 const module = await import(pathToFileURL(process.argv[2]).href);
@@ -141,6 +163,43 @@ def send(
         return report["sent"]
 
     return sent
+
+
+@pytest.fixture
+def answer(tmp_path: Path) -> Callable[..., list[dict[str, Any]]]:
+    """Return a function that runs generated code against a server answering by path.
+
+    A compiled client reads what it sends next out of what came back, so the answers are
+    deliberately not the ones the capture recorded: a client that replayed the observed
+    values would send the wrong requests and the test would say so.
+    """
+
+    def run(
+        code: str,
+        answers: dict[str, Any],
+        environment: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        module = tmp_path / "client.mjs"
+        module.write_text(code, encoding="utf-8")
+        harness = tmp_path / "harness.mjs"
+        harness.write_text(
+            COMPILE_HARNESS.replace("__ANSWERS__", json.dumps(answers)), encoding="utf-8"
+        )
+        assert NODE is not None
+        finished = subprocess.run(
+            [NODE, str(harness), str(module)],
+            capture_output=True,
+            text=True,
+            env=environment or {},
+            timeout=60,
+            check=False,
+        )
+        assert finished.returncode == 0, finished.stderr
+        report = json.loads(finished.stdout)
+        assert report["responses"] == len(report["sent"])
+        return report["sent"]
+
+    return run
 
 
 def header(request: dict[str, Any], name: str) -> str | None:
@@ -692,3 +751,285 @@ def test_the_example_capture_produces_a_client_that_sends_the_observed_requests(
         ("POST", "https://shop.example.com/api/v1/orders/4711/confirm"),
     ]
     assert header(sent[1], "Authorization") == "Bearer supplied"
+
+
+# Compiled clients, which read what the workflow depends on
+
+
+def answering(entry_id: str, url: str, payload: str, **arguments: Any) -> Entry:
+    """Build an exchange whose response hands out a JSON payload."""
+    built = entry(entry_id, url, **arguments)
+    return built.model_copy(
+        update={
+            "response": built.response.model_copy(
+                update={"body": Body(mime_type="application/json", text=payload)}
+            )
+        }
+    )
+
+
+def confirming(entry_id: str, payload: str) -> Entry:
+    """Build an exchange posting ``payload`` as a form encoded body."""
+    return entry(
+        entry_id,
+        "https://shop.example.com/api/confirm",
+        method="POST",
+        headers=[("Content-Type", FORM)],
+        body=Body(mime_type=FORM, text=payload),
+    )
+
+
+def test_the_preamble_reports_the_workflow_and_what_the_client_reads() -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/orders", '{"orders":[{"id":"4711998"}]}'),
+            entry("b", "https://shop.example.com/api/orders/4711998"),
+        )
+    )
+    assert "The workflow runs in 2 stages: 1 of 2 requests waits for an earlier response." in (
+        client.code
+    )
+    assert "1 value read from a response as the client runs" in client.code
+    assert "orders_id  1  response.body.orders[0].id  sent on by 2" in client.code
+
+
+def test_a_capture_with_nothing_to_read_says_so() -> None:
+    client = compile_javascript(
+        capture(
+            entry("a", "https://shop.example.com/api/orders"),
+            entry("b", "https://shop.example.com/api/customers"),
+        )
+    )
+    assert "No value a request sent came from an earlier response." in client.code
+    assert client.dependencies.is_empty
+    assert client.graph is not None
+
+
+def test_a_compiled_client_with_nothing_to_send_makes_no_claim_about_a_workflow() -> None:
+    client = compile_javascript(
+        capture(
+            entry("a", "https://cdn.example.com/app.css", resource_type=ResourceType.STYLESHEET)
+        )
+    )
+    assert "// Reproducing 0 of 1 captured request." in client.code
+    assert "The workflow runs in" not in client.code
+
+
+@needs_node
+def test_an_identifier_is_read_from_the_response_rather_than_replayed(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/orders", '{"orders":[{"id":"4711998"}]}'),
+            entry("b", "https://shop.example.com/api/orders/4711998/items"),
+        )
+    )
+    assert 'orders_id = (await response1.json())["orders"][0]["id"]' in client.code
+    sent = answer(client.code, {"/api/orders": {"orders": [{"id": "8899001"}]}})
+    assert [request["url"] for request in sent] == [
+        "https://shop.example.com/api/orders",
+        "https://shop.example.com/api/orders/8899001/items",
+    ]
+
+
+@needs_node
+def test_a_value_read_into_a_query_string_is_encoded_by_search_params(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"cursor":"c-9981723"}'),
+            entry("b", "https://shop.example.com/api/page?cursor=c-9981723&limit=20"),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"cursor": "a b&c"}})
+    assert sent[1]["url"] == "https://shop.example.com/api/page?cursor=a+b%26c&limit=20"
+
+
+@needs_node
+def test_a_value_read_into_a_header_keeps_the_text_around_it(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"trace":"tr-9981723"}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/next",
+                headers=[("X-Trace", "span tr-9981723 end")],
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"trace": "tr-0000001"}})
+    assert header(sent[1], "X-Trace") == "span tr-0000001 end"
+
+
+@needs_node
+def test_a_value_read_into_a_payload_leaves_the_other_fields_alone(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("Content-Type", "application/json")],
+                body=Body(
+                    mime_type="application/json",
+                    text='{"method":"invoice","ref":"CNF-998172","note":"see CNF-998172"}',
+                ),
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"ref": 'CNF-"01"'}})
+    assert json.loads(sent[1]["body"]) == {
+        "method": "invoice",
+        "ref": 'CNF-"01"',
+        "note": 'see CNF-"01"',
+    }
+
+
+@needs_node
+def test_a_payload_field_that_held_a_number_keeps_holding_one(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"id":4711998}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/confirm",
+                method="POST",
+                headers=[("Content-Type", "application/json")],
+                body=Body(mime_type="application/json", text='{"order":4711998}'),
+            ),
+        )
+    )
+    sent = answer(client.code, {"/api/page": {"id": 8899001}})
+    assert json.loads(sent[1]["body"]) == {"order": 8899001}
+
+
+@needs_node
+def test_a_credential_carried_between_requests_stays_an_environment_variable(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/login", f'{{"token":"{ACCESS_TOKEN}"}}'),
+            entry(
+                "b",
+                "https://shop.example.com/api/orders",
+                headers=[("Authorization", f"Bearer {ACCESS_TOKEN}")],
+            ),
+        )
+    )
+    assert ACCESS_TOKEN not in client.code
+    assert "const TRACE2API_AUTHORIZATION = requireEnv(" in client.code
+    assert "1 value the workflow took from a response is replayed as observed:" in client.code
+    assert "the value is a credential the client is given from the environment" in client.code
+    sent = answer(client.code, {}, {"TRACE2API_AUTHORIZATION": "supplied"})
+    assert header(sent[1], "Authorization") == "Bearer supplied"
+
+
+# Two links compile_python can read back that fetch has no way to express
+
+
+@needs_node
+def test_a_link_into_a_form_payload_is_replayed_as_observed_instead(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            answering("a", "https://shop.example.com/api/page", '{"ref":"CNF-998172"}'),
+            confirming("b", "ref=CNF-998172&note=two+items"),
+        )
+    )
+    assert client.dependencies.unresolved[0].reason == (
+        "the JavaScript client does not yet rewrite a value into a form encoded payload"
+    )
+    assert "// note: request.body[ref] replays what the capture observed" in client.code
+    sent = answer(client.code, {"/api/page": {"ref": "CNF-8899001"}})
+    # Unlike the Python target, the field is sent exactly as the capture observed it,
+    # because fetch has no way to encode a supplied value into a form payload itself.
+    assert sent[1]["body"] == "ref=CNF-998172&note=two+items"
+
+
+@needs_node
+def test_a_repeated_header_read_by_position_is_replayed_as_observed_instead(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(
+        capture(
+            entry(
+                "a",
+                "https://shop.example.com/api/page",
+                resource_type=ResourceType.XHR,
+            ).model_copy(
+                update={
+                    "response": Response(
+                        status=200,
+                        headers=Headers.from_pairs(
+                            [
+                                ("Content-Type", "application/json"),
+                                ("X-Tag", "one"),
+                                ("X-Tag", "tr-9981723"),
+                            ]
+                        ),
+                        body=Body(mime_type="application/json", text="{}"),
+                    )
+                }
+            ),
+            entry(
+                "b",
+                "https://shop.example.com/api/next",
+                headers=[("X-Trace", "span tr-9981723 end")],
+            ),
+        )
+    )
+    assert client.dependencies.unresolved[0].reason == (
+        "fetch has no way to read one of several repeated headers by position"
+    )
+    sent = answer(client.code, {})
+    assert header(sent[1], "X-Trace") == "span tr-9981723 end"
+
+
+def test_the_compiled_example_carries_no_observed_credential() -> None:
+    client = compile_javascript(load_har(EXAMPLE_HAR))
+    for observed in (ACCESS_TOKEN, SESSION_VALUE, "example-csrf-value"):
+        assert observed not in client.code
+    assert "<redacted:" not in client.code
+
+
+def test_a_salt_makes_the_compiled_client_reproducible() -> None:
+    recorded = load_har(EXAMPLE_HAR)
+    first = compile_javascript(recorded, salt=b"fixed-salt")
+    second = compile_javascript(recorded, salt=b"fixed-salt")
+    assert first.code == second.code
+
+
+@needs_node
+def test_the_example_capture_compiles_into_a_client_that_follows_the_server(
+    answer: Callable[..., list[dict[str, Any]]],
+) -> None:
+    client = compile_javascript(load_har(EXAMPLE_HAR))
+    sent = answer(
+        client.code,
+        {
+            "/api/v1/orders": {"orders": [{"id": "8899001"}]},
+            "/api/v1/orders/8899001": {"confirmation_ref": "CNF-8899001-02"},
+        },
+        {binding.variable: "supplied" for binding in client.secrets},
+    )
+    assert [request["url"] for request in sent] == [
+        "https://shop.example.com/orders",
+        "https://shop.example.com/api/v1/orders?status=open&limit=20",
+        "https://shop.example.com/api/v1/orders/8899001",
+        "https://shop.example.com/api/v1/orders/8899001/confirm",
+    ]
+    assert json.loads(sent[3]["body"]) == {
+        "payment_method": "invoice",
+        "confirmation_ref": "CNF-8899001-02",
+    }

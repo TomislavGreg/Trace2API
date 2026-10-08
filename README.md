@@ -980,7 +980,13 @@ capture taken once, is what `trace2api benchmark` reports.
   it was not asked to change are sent as the capture spelled them. What it could not
   resolve, such as a credential or a value sent in a payload that is neither JSON nor a
   form, is replayed as observed and reported with the reason, in the module docstring and
-  as a note on the call that sends it. `--all` compiles the filtered requests too.
+  as a note on the call that sends it. `--target javascript` compiles the same graph into
+  an ES module using `fetch` instead, reading a path segment, a query parameter, a header,
+  or a JSON payload field the same way. `fetch` has no way to encode a read value into a
+  form payload the way `httpx` does, and `Headers.get` only ever returns the first of a
+  header sent more than once, so both kinds of link are replayed as observed and named
+  with that reason, the same as one the trace itself could not resolve. `--all` compiles
+  the filtered requests too, for either target.
 - A replay engine, `trace2api.replay.replay_capture`, that redacts a capture and sends the
   requests worth keeping over the network with httpx, given the value of every secret
   redaction removed as an explicit argument rather than read from the environment. A
@@ -1271,6 +1277,8 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-016 | Build and display a request dependency graph. | Done | T2A-015 |
 | T2A-017 | Compile a direct multi-request client from the inferred graph. | Done | T2A-016, T2A-014, T2A-008 |
 | T2A-032 | Resolve links into form encoded payloads when compiling a client. | Done | T2A-017 |
+| T2A-034 | Compile the inferred graph into a JavaScript `fetch` client, alongside the Python one. | Done | T2A-017, T2A-009 |
+| T2A-035 | Resolve a link into a form encoded payload when compiling a JavaScript client. | Backlog | T2A-034, T2A-032 |
 
 ### Phase 4: Replay and verification
 
@@ -1562,6 +1570,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-08 - `compile` now takes `--target javascript`, writing the same dependency graph as an ES module using `fetch` instead of a Python one; a value that would need rewriting a form payload or reading a repeated header by position is replayed as observed and named, since `fetch` has no way to do either.
 - 2026-10-07 - Added `CHANGELOG.md` and `RELEASING.md`, bumped the package to v0.1.0, and recorded T2A-030 as done, closing out the Phase 6 ticket board.
 - 2026-10-06 - The package installs directly from the git repository with `pipx` or runs ad hoc with `uvx`, with no PyPI release needed for either; CI now builds the wheel and sdist on every run.
 - 2026-10-05 - The quick start now runs `inspect`, `compile`, and `verify` against a live `trace2api demo` instance, replacing the illustrative example with a capture actually replayed and matched.
@@ -1575,7 +1584,6 @@ them.
 - 2026-09-24 - Added `trace2api verify`, which replays a capture's kept requests and reports whether each response matches what the browser observed, exiting with a nonzero status on a mismatch.
 - 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
 - 2026-09-22 - Added a replay engine that sends the requests of a sanitized capture over the network, with every secret redaction removed supplied explicitly instead of read from the environment.
-- 2026-09-21 - A compiled client now reads back the values a workflow sent in a form encoded payload, encoding each supplied field where the payload carried it and sending the rest as the capture spelled them.
 
 ## License
 

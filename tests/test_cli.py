@@ -920,6 +920,29 @@ class TestCompileCommand:
     def test_a_capture_is_required(self) -> None:
         assert runner.invoke(app, ["compile"]).exit_code != 0
 
+    def test_a_javascript_target_reads_a_dependent_value_out_of_the_response(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR), "--target", "javascript"])
+        assert result.exit_code == 0
+        assert result.stdout.startswith("// Direct client for a workflow recorded ")
+        assert 'orders_id = (await response4.json())["orders"][0]["id"]' in result.stdout
+        assert '"https://shop.example.com/api/v1/orders/" + String(orders_id)' in result.stdout
+
+    def test_a_javascript_target_keeps_credentials_out_of_the_code(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR), "--target", "javascript"])
+        assert result.exit_code == 0
+        assert "<redacted:" not in result.output
+        assert 'const TRACE2API_AUTHORIZATION = requireEnv("TRACE2API_AUTHORIZATION");' in (
+            result.stdout
+        )
+
+    def test_curl_is_not_offered_as_a_compile_target(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR), "--target", "curl"])
+        assert result.exit_code != 0
+
+    def test_an_unknown_compile_target_is_refused(self) -> None:
+        result = runner.invoke(app, ["compile", str(EXAMPLE_HAR), "--target", "rust"])
+        assert result.exit_code != 0
+
 
 def verification(*requests: VerifiedRequest) -> CaptureVerification:
     """Build a verification report as ``verify_capture`` would return one."""
