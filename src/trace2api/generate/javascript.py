@@ -12,8 +12,9 @@ that decide what it looks like are the ones that decide whether it works:
 * Bodies are sent as the text that was observed rather than re-serialized from a parsed
   structure that could reorder or reformat them.
 * A query string holding a credential is rebuilt through `URLSearchParams` and a form
-  encoded body holding one has that field encoded through `encodeURIComponent`, so the
-  supplied value is encoded either way. Every other URL and body is written as observed.
+  encoded body holding a credential, or a value read from an earlier response, has that
+  field encoded through `encodeURIComponent`, so the supplied value is encoded either
+  way. Every other URL and body is written as observed.
 * Headers fetch sets for itself are left out, because sending a stale `Content-Length`
   or a `Host` that disagrees with the URL breaks the request. Every omission names the
   rule behind it.
@@ -35,11 +36,9 @@ answers with rather than only against the one workflow that was recorded. A link
 resolve is replayed as observed and named in the module preamble together with the reason,
 so what the client reproduces and what it merely repeats are both readable in the output.
 
-Two kinds of link `compile_python` resolves are replayed here regardless: a value written
-into a form encoded payload, because nothing in `fetch` encodes a supplied value into one
-the way `httpx` does, and one of several repeated headers read by position, because
-`Headers.get` only ever returns the first. Both are named with that reason rather than
-silently sent as observed with no explanation.
+One kind of link `compile_python` resolves is replayed here regardless: one of several
+repeated headers read by position, because `Headers.get` only ever returns the first. It
+is named with that reason rather than silently sent as observed with no explanation.
 """
 
 from __future__ import annotations
@@ -65,7 +64,7 @@ from trace2api.generate.dependencies import (
     resolve_dependencies,
     write_json_leaf,
 )
-from trace2api.generate.forms import FormField, form_fields, form_secrets
+from trace2api.generate.forms import FormField, form_field_places, form_fields, form_secrets
 from trace2api.generate.headers import HeaderRule, OmittedHeader, partition_headers
 from trace2api.generate.secrets import SecretBindings, bind_secrets
 from trace2api.models import Body, Capture, Entry, Header, QueryParams, Request
@@ -196,12 +195,10 @@ def compile_javascript(
 def _javascript_resolution(resolution: DependencyResolution) -> DependencyResolution:
     """Replay a link this target cannot express yet, naming why, the same as an unresolved one.
 
-    Nothing in ``fetch`` encodes a supplied value into a form payload the way the Python
-    target's ``httpx`` client does, and ``Headers.get`` only ever returns the first of a
-    header sent more than once, where ``compile_python`` reads one of them by position. Both
-    links are resolvable in principle, so the trace reports them as resolved; it is only
-    this target that falls short, which is why the downgrade happens here rather than in
-    the trace itself.
+    ``Headers.get`` only ever returns the first of a header sent more than once, where
+    ``compile_python`` reads one of them by position. That link is resolvable in
+    principle, so the trace reports it as resolved; it is only this target that falls
+    short, which is why the downgrade happens here rather than in the trace itself.
     """
     resolved: list[ResolvedDependency] = []
     unresolved = list(resolution.unresolved)
@@ -224,8 +221,6 @@ def _javascript_resolution(resolution: DependencyResolution) -> DependencyResolu
 
 def _unsupported_reason(item: ResolvedDependency) -> str | None:
     """Return why the JavaScript target cannot resolve ``item``, or ``None`` when it can."""
-    if item.site.kind is SiteKind.FORM_FIELD:
-        return "the JavaScript client does not yet rewrite a value into a form encoded payload"
     if item.accessor.kind is AccessorKind.HEADER and item.accessor.index is not None:
         return "fetch has no way to read one of several repeated headers by position"
     return None
@@ -282,6 +277,7 @@ def render_call(
     request = entry.request
     sent = () if dependencies is None else tuple(dependencies.sent_by(position))
     replayed = () if dependencies is None else tuple(dependencies.replayed_by(position))
+    in_form = [item for item in sent if item.site.kind is SiteKind.FORM_FIELD]
     headers, omitted = partition_headers(request.headers, FETCH_OMISSION_REASONS)
     url_lines, url, query_secrets = _url_expression(request, secrets, position=position, sent=sent)
     body, notes, body_secrets = _body_property(request, secrets=secrets, sent=sent)
@@ -312,9 +308,11 @@ def render_call(
             for fingerprint in query_secrets
         ]
         + [
-            f"{secrets.variable_for(fingerprint)} is encoded into the form payload "
-            "where the capture observed it"
-            for fingerprint in body_secrets
+            f"{name} is encoded into the form payload where the capture observed it"
+            for name in [
+                *(secrets.variable_for(fingerprint) for fingerprint in body_secrets),
+                *dict.fromkeys(item.variable for item in in_form),
+            ]
         ]
         + notes
         + [
@@ -476,9 +474,10 @@ def _body_property(
 ) -> tuple[str | None, list[str], tuple[str, ...]]:
     """Return the body property for ``request``, what it cannot reproduce, and its secrets.
 
-    A form encoded body that held a credential has the value encoded where it was sent,
-    for the same reason a query string holding one is rebuilt: the value comes back from
-    the environment unencoded. A JSON body with a value read from a response has that
+    A form encoded body that held a credential, or that carries a value read from an
+    earlier response, has that field encoded where it was sent, for the same reason a
+    query string holding either is rebuilt: neither comes back from the environment or
+    out of a response encoded. A JSON body with a value read from a response has that
     field rewritten around it; every other body is sent as the text that was captured.
     """
     body: Body | None = request.body
@@ -502,9 +501,10 @@ def _body_property(
     fields = form_fields(body)
     if fields is not None:
         fingerprints = form_secrets(fields)
-        if fingerprints:
-            return _form_expression(fields, secrets), notes, fingerprints
-        return _expression(body.text or "", secrets), notes, ()
+        written = _by_form_field(fields, sent)
+        if not fingerprints and not written:
+            return _expression(body.text or "", secrets), notes, ()
+        return _form_expression(fields, written, secrets), notes, fingerprints
     json_fields = [item for item in sent if item.site.kind is SiteKind.JSON_FIELD]
     if not json_fields:
         return _expression(body.text or "", secrets), notes, ()
@@ -517,25 +517,54 @@ def _body_property(
     return content, notes, ()
 
 
-def _form_expression(fields: list[FormField], secrets: SecretBindings) -> str:
-    """Return a form payload with each credential encoded where its value was sent.
+def _form_expression(
+    fields: list[FormField],
+    written: dict[int, list[_Substitution]],
+    secrets: SecretBindings,
+) -> str:
+    """Return a form payload with each supplied value encoded where its field was sent.
 
-    Every other field is written as the payload spelled it, so the only part of the body
-    that differs from the capture is the one part the client had to supply.
+    Every other field is written as the payload spelled it, so the only parts of the body
+    that differ from the capture are the ones the client had to supply.
     """
     parts: list[str] = []
     observed = ""
     for index, field in enumerate(fields):
         separator = "&" if index else ""
-        if not field.is_secret:
+        supplied = _form_value(field, written.get(index, ()), secrets)
+        if supplied is None:
             observed += separator + field.spelled
             continue
         parts.append(_string(f"{observed}{separator}{field.name}="))
         observed = ""
-        parts.append(f"encodeURIComponent({secrets.variable_for(field.fingerprint or '')})")
+        parts.append(supplied)
     if observed:
         parts.append(_string(observed))
     return " + ".join(parts)
+
+
+def _form_value(
+    field: FormField, written: Sequence[_Substitution], secrets: SecretBindings
+) -> str | None:
+    """Return what the client sends for one field, or ``None`` for one it does not supply.
+
+    A credential comes back from the environment as itself and a value read out of a
+    response is whatever the response held, so the whole field is encoded around either
+    one. The value is rebuilt from what the server read rather than from what the payload
+    spelled, because that is the value the trace found the link in.
+    """
+    if field.is_secret:
+        return f"encodeURIComponent({secrets.variable_for(field.fingerprint or '')})"
+    if not written:
+        return None
+    return f"encodeURIComponent({_pieces(field.decoded, written, secrets)})"
+
+
+def _by_form_field(
+    fields: list[FormField], dependencies: Sequence[ResolvedDependency]
+) -> dict[int, list[_Substitution]]:
+    """Gather the values read into each form field, by its place in the payload."""
+    return _grouped(dependencies, form_field_places(fields))
 
 
 _FIELD_TOKEN = "trace2api-field"
