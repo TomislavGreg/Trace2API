@@ -150,6 +150,18 @@ class TestBody:
         assert Body().as_bytes() == b""
         assert not Body(text="{}").is_empty
 
+    def test_multipart_form_is_held_as_text(self) -> None:
+        raw = b'--b1\r\nContent-Disposition: form-data; name="a"\r\n\r\n1\r\n--b1--\r\n'
+        body = Body.from_bytes("multipart/form-data; boundary=b1", raw)
+        assert body.encoding is None
+        assert body.text == raw.decode()
+
+    def test_multipart_form_with_binary_content_falls_back_to_base64(self) -> None:
+        raw = b"--b1\r\n\r\n" + bytes(range(256)) + b"\r\n--b1--\r\n"
+        body = Body.from_bytes("multipart/form-data; boundary=b1", raw)
+        assert body.encoding == "base64"
+        assert body.as_bytes() == raw
+
 
 class TestTimings:
     def test_unreported_phases_are_none(self) -> None:

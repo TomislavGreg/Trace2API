@@ -1070,7 +1070,10 @@ capture taken once, is what `trace2api benchmark` reports.
   and rule. A body that is not a structure redaction can read, such as a page or a
   script, is scanned as text instead, so a token assigned to a named field, handed over
   in a `meta` element, or written out in full is removed where it sits while everything
-  around it survives.
+  around it survives. A multipart form is read as the fields it is rather than scanned
+  as text: a field named for a credential, or one holding a JWT shaped value, is
+  redacted by its own boundary delimited part, while a file part's content and any part
+  this cannot make sense of is left as observed.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1246,6 +1249,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-002 | Core traffic models for requests, responses, headers, bodies, timing, and capture metadata. | Done | T2A-001 |
 | T2A-003 | Secret redaction before persistence or display, with focused tests. | Done | T2A-002 |
 | T2A-031 | Redact credential shaped values inside recorded text bodies, such as a token written into a page script. | Done | T2A-003 |
+| T2A-036 | Redact credential named or JWT shaped fields inside a multipart form body, which previously reached a capture unredacted. | Done | T2A-031 |
 
 ### Phase 1: HAR to code
 
@@ -1570,6 +1574,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-10 - `compile --target javascript` now resolves a link into a form encoded payload the same way the Python target does, encoding the value through `encodeURIComponent` where the capture observed the field; only a repeated header read by position still falls back to replaying it as observed.
 - 2026-10-08 - `compile` now takes `--target javascript`, writing the same dependency graph as an ES module using `fetch` instead of a Python one; a value that would need rewriting a form payload or reading a repeated header by position is replayed as observed and named, since `fetch` has no way to do either.
 - 2026-10-07 - Added `CHANGELOG.md` and `RELEASING.md`, bumped the package to v0.1.0, and recorded T2A-030 as done, closing out the Phase 6 ticket board.
@@ -1583,7 +1588,6 @@ them.
 - 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
 - 2026-09-27 - Added `trace2api test`, which writes a capture's verify check out as a Pytest module that rereads the capture and reruns the comparison each time it is invoked.
 - 2026-09-24 - Added `trace2api verify`, which replays a capture's kept requests and reports whether each response matches what the browser observed, exiting with a nonzero status on a mismatch.
-- 2026-09-23 - Added `trace2api.analyze.compare_responses`, which compares a browser observed response with a replayed one by structure rather than by value, so a live server handing out a fresh token or timestamp is not reported as a mismatch.
 
 ## License
 

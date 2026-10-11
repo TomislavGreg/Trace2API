@@ -72,12 +72,19 @@ _TEXT_MEDIA_TYPES = frozenset(
         "application/xml",
         "application/graphql",
         "image/svg+xml",
+        "multipart/form-data",
     }
 )
 
 
 def _is_textual(mime_type: str | None) -> bool:
-    """Return whether a media type describes something to hold as characters."""
+    """Return whether a media type describes something to hold as characters.
+
+    A multipart form carries a file part on occasion, which rarely decodes as UTF-8, so
+    ``from_bytes`` below falls back to holding it as base64 regardless of this answer.
+    Calling it textual here is what lets a form of ordinary fields, the common case, be
+    read as the structure it is rather than treated as opaque and left unredacted.
+    """
     if mime_type is None:
         return False
     media_type = mime_type.split(";", 1)[0].strip().lower()
