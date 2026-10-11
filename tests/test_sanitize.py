@@ -76,6 +76,18 @@ def html_body(markup: str) -> Body:
     return Body(mime_type="text/html; charset=utf-8", text=markup)
 
 
+def multipart_body(fields: list[tuple[str, str, str | None]], *, boundary: str = "b1") -> Body:
+    """Build a multipart body from ``(name, value, filename)`` fields, filename optional."""
+    parts = []
+    for name, value, filename in fields:
+        disposition = f'Content-Disposition: form-data; name="{name}"'
+        if filename is not None:
+            disposition += f'; filename="{filename}"'
+        parts.append(f"{disposition}\r\n\r\n{value}\r\n")
+    text = "".join(f"--{boundary}\r\n{part}" for part in parts) + f"--{boundary}--\r\n"
+    return Body(mime_type=f"multipart/form-data; boundary={boundary}", text=text)
+
+
 class TestPolicy:
     @pytest.mark.parametrize(
         "name",
@@ -368,6 +380,46 @@ class TestBodyRedaction:
         assert "hunter2" not in text
         assert text.startswith('{"password": ')
         assert locations == ["request.body.password"]
+
+    def test_multipart_fields_are_replaced_by_name(self) -> None:
+        body = multipart_body(
+            [
+                ("username", "demo", None),
+                ("password", "hunter2-supersecret", None),
+                ("avatar", "binary-stand-in", "photo.png"),
+            ]
+        )
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        text = entry.request.body.text or ""
+        assert "username" in text and "demo" in text
+        assert "hunter2-supersecret" not in text
+        assert 'name="avatar"' in text and "binary-stand-in" in text
+        assert locations == ["request.body[password]"]
+
+    def test_multipart_jwt_shaped_field_is_replaced(self) -> None:
+        body = multipart_body([("session", FAKE_JWT, None)])
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        text = entry.request.body.text or ""
+        assert FAKE_JWT not in text
+        assert locations == ["request.body[session]"]
+
+    def test_multipart_without_credentials_is_returned_unchanged(self) -> None:
+        body = multipart_body([("status", "open", None), ("page", "2", None)])
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body == body
+        assert locations == []
+
+    def test_multipart_without_a_declared_boundary_is_read_as_text(self) -> None:
+        body = Body(
+            mime_type="multipart/form-data",
+            text='Content-Disposition: form-data; name="password"\r\n\r\nhunter2\r\n',
+        )
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        assert "hunter2" in (entry.request.body.text or "")
+        assert locations == []
 
     def test_binary_bodies_are_left_as_observed(self) -> None:
         body = Body(mime_type="image/png", text="aGVsbG8=", encoding="base64")

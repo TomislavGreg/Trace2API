@@ -65,6 +65,16 @@ _FINGERPRINT_LENGTH = 8
 _PLACEHOLDER_PATTERN = re.compile(rf"<redacted:([0-9a-f]{{{_FINGERPRINT_LENGTH}}})>")
 
 _FORM_MEDIA_TYPE = "application/x-www-form-urlencoded"
+_MULTIPART_MEDIA_TYPE = "multipart/form-data"
+
+_MULTIPART_LEADING_NEWLINE = re.compile(r"\A(\r\n|\n)")
+_MULTIPART_BLANK_LINE = re.compile(r"(\r\n\r\n|\n\n)")
+_MULTIPART_TRAILING_NEWLINE = re.compile(r"(\r\n|\n)\Z")
+_MULTIPART_DISPOSITION = re.compile(
+    r"(?im)^Content-Disposition\s*:\s*form-data(?P<params>[^\r\n]*)$"
+)
+_MULTIPART_NAME = re.compile(r'name\s*=\s*"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
+_MULTIPART_FILENAME = re.compile(r'filename\s*=\s*"', re.IGNORECASE)
 
 
 def is_redacted(value: str) -> bool:
@@ -377,6 +387,8 @@ class _Redactor:
             return self._redact_json_body(body, location)
         if body.media_type == _FORM_MEDIA_TYPE:
             return self._redact_form_body(body, location)
+        if body.media_type == _MULTIPART_MEDIA_TYPE:
+            return self._redact_multipart_body(body, location)
         return self._redact_text_body(body, location)
 
     def _redact_json_body(self, body: Body, location: str) -> Body:
@@ -454,3 +466,82 @@ class _Redactor:
         if redacted is None:
             return body
         return body.model_copy(update={"text": urlencode(redacted)})
+
+    def _redact_multipart_body(self, body: Body, location: str) -> Body:
+        """Redact the fields of a multipart form, keeping everything else byte for byte.
+
+        A field is split from the rest of the payload by its boundary, which is read
+        from the declared media type rather than guessed, so a value is never mistaken
+        for a delimiter. A part this cannot make sense of, including the whole body when
+        no boundary was declared, is read as text instead rather than left untouched.
+        """
+        boundary = _multipart_boundary(body.mime_type or "")
+        if boundary is None:
+            return self._redact_text_body(body, location)
+        delimiter = f"--{boundary}"
+        segments = (body.text or "").split(delimiter)
+        if len(segments) < 3:
+            return self._redact_text_body(body, location)
+        changed = False
+        for index in range(1, len(segments) - 1):
+            redacted_segment, segment_changed = self._redact_multipart_part(
+                segments[index], location
+            )
+            if segment_changed:
+                segments[index] = redacted_segment
+                changed = True
+        if not changed:
+            return body
+        return body.model_copy(update={"text": delimiter.join(segments)})
+
+    def _redact_multipart_part(self, part: str, location: str) -> tuple[str, bool]:
+        """Redact one field of a multipart form, or return it unchanged."""
+        leading = _MULTIPART_LEADING_NEWLINE.match(part)
+        if leading is None:
+            return part, False
+        rest = part[leading.end() :]
+        blank = _MULTIPART_BLANK_LINE.search(rest)
+        if blank is None:
+            return part, False
+        headers_text = rest[: blank.start()]
+        content = rest[blank.end() :]
+        trailing = _MULTIPART_TRAILING_NEWLINE.search(content)
+        value = content[: trailing.start()] if trailing else content
+        if not value:
+            return part, False
+        disposition = _MULTIPART_DISPOSITION.search(headers_text)
+        if disposition is None or _MULTIPART_FILENAME.search(disposition["params"]):
+            # An unnamed part or a file carries no field name to judge, and a file's
+            # content is not read as text here either: the structure, not the bytes
+            # inside a part this project does not otherwise claim to understand.
+            return part, False
+        name_match = _MULTIPART_NAME.search(disposition["params"])
+        if name_match is None:
+            return part, False
+        name = name_match.group(1).replace('\\"', '"')
+        where = f"{location}[{name}]"
+        if is_sensitive_name(name):
+            rule = RedactionRule.SENSITIVE_PARAMETER
+        elif is_jwt_shaped(value):
+            rule = RedactionRule.JWT_SHAPED_VALUE
+        else:
+            return part, False
+        replaced = self._replace(value, where, rule)
+        if replaced == value:
+            return part, False
+        rebuilt = leading.group(0) + headers_text + blank.group(1) + replaced
+        rebuilt += content[trailing.start() :] if trailing else ""
+        return rebuilt, True
+
+
+def _multipart_boundary(mime_type: str) -> str | None:
+    """Return the boundary a multipart media type declared, or ``None`` without one."""
+    for parameter in mime_type.split(";")[1:]:
+        name, separator, value = parameter.partition("=")
+        if not separator or name.strip().lower() != "boundary":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        return value or None
+    return None
