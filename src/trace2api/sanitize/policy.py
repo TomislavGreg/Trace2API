@@ -157,10 +157,22 @@ def normalize_name(name: str) -> str:
 
 
 def is_sensitive_name(name: str) -> bool:
-    """Return whether a header, parameter, or field name names a credential."""
+    """Return whether a header, parameter, or field name names a credential.
+
+    A plain trailing ``s`` is stripped before the name and suffix rules are tried again,
+    so ``tokens``, ``api_keys``, and ``passwords`` are recognized the same way their
+    singular forms are: an API describing a batch of credentials does not stop naming
+    them credentials for it.
+    """
     normalized = normalize_name(name)
     if not normalized:
         return False
+    if _matches_sensitive_name(normalized):
+        return True
+    return normalized.endswith("s") and _matches_sensitive_name(normalized[:-1])
+
+
+def _matches_sensitive_name(normalized: str) -> bool:
     if normalized in _SENSITIVE_NAMES:
         return True
     return normalized.endswith(_SENSITIVE_NAME_SUFFIXES)
