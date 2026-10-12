@@ -106,7 +106,21 @@ class TestPolicy:
 
     @pytest.mark.parametrize(
         "name",
-        ["order_id", "page", "content-type", "customer", "tokenizer", "", "locale"],
+        [
+            "tokens",
+            "api_keys",
+            "passwords",
+            "secrets",
+            "sessions",
+            "Cookies",
+        ],
+    )
+    def test_plural_credential_names_are_recognized(self, name: str) -> None:
+        assert is_sensitive_name(name)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["order_id", "page", "content-type", "customer", "tokenizer", "", "locale", "keys"],
     )
     def test_ordinary_names_are_left_alone(self, name: str) -> None:
         assert not is_sensitive_name(name)
@@ -323,6 +337,16 @@ class TestBodyRedaction:
         assert is_redacted(payload["otp"])
         assert "123456" not in (entry.request.body.text or "")
         assert locations == ["request.body.otp"]
+
+    def test_a_plural_credential_named_field_is_replaced(self) -> None:
+        body = json_body({"tokens": "sk_live_abc123", "count": 2})
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        payload = json.loads(entry.request.body.text or "")
+        assert payload["count"] == 2
+        assert is_redacted(payload["tokens"])
+        assert "sk_live_abc123" not in (entry.request.body.text or "")
+        assert locations == ["request.body.tokens"]
 
     def test_a_credential_named_object_is_walked_into(self) -> None:
         body = json_body({"auth": {"scheme": "basic", "password": "hunter2"}})
