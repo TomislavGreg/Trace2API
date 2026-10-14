@@ -1069,13 +1069,17 @@ capture taken once, is what `trace2api benchmark` reports.
   URL userinfo, and token shaped values, with a report of what was removed by location
   and rule. A name is recognized in its plural form as well as singular, so a field
   called `tokens` or `api_keys` is redacted the same way `token` or `api_key` already
-  was. A body that is not a structure redaction can read, such as a page or a
-  script, is scanned as text instead, so a token assigned to a named field, handed over
-  in a `meta` element, or written out in full is removed where it sits while everything
-  around it survives. A multipart form is read as the fields it is rather than scanned
-  as text: a field named for a credential, or one holding a JWT shaped value, is
-  redacted by its own boundary delimited part, while a file part's content and any part
-  this cannot make sense of is left as observed.
+  was, and a plain string or number sitting directly in such a field's array, such as
+  `{"tokens": ["sk_live_..."]}`, is replaced whole the same way a scalar under that name
+  already was, rather than only caught where it happens to match a known shape. An
+  object inside that array is still walked into on its own terms, the same as one
+  directly under the name is. A body that is not a structure redaction can read, such as
+  a page or a script, is scanned as text instead, so a token assigned to a named field,
+  handed over in a `meta` element, or written out in full is removed where it sits while
+  everything around it survives. A multipart form is read as the fields it is rather
+  than scanned as text: a field named for a credential, or one holding a JWT shaped
+  value, is redacted by its own boundary delimited part, while a file part's content and
+  any part this cannot make sense of is left as observed.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1253,7 +1257,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-031 | Redact credential shaped values inside recorded text bodies, such as a token written into a page script. | Done | T2A-003 |
 | T2A-036 | Redact credential named or JWT shaped fields inside a multipart form body, which previously reached a capture unredacted. | Done | T2A-031 |
 | T2A-037 | Recognize a credential field name in its plural form, such as `tokens` or `api_keys`, which previously reached a capture unredacted. | Done | T2A-003 |
-| T2A-038 | Redact a plain string held in a JSON array under a credential named field, such as `{"tokens": ["sk_live_..."]}`, which still reaches a capture unredacted because an array is only ever walked into, never replaced as a whole. | Backlog | T2A-037 |
+| T2A-038 | Redact a plain string held in a JSON array under a credential named field, such as `{"tokens": ["sk_live_..."]}`, which still reaches a capture unredacted because an array is only ever walked into, never replaced as a whole. | Done | T2A-037 |
 
 ### Phase 1: HAR to code
 
@@ -1578,6 +1582,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-10 - `compile --target javascript` now resolves a link into a form encoded payload the same way the Python target does, encoding the value through `encodeURIComponent` where the capture observed the field; only a repeated header read by position still falls back to replaying it as observed.

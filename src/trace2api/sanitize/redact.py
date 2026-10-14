@@ -410,11 +410,22 @@ class _Redactor:
             changed = False
             for key, item in value.items():
                 where = f"{location}.{key}"
-                if is_sensitive_name(key) and _holds_a_value(item):
-                    replaced = self._replace(str(item), where, RedactionRule.SENSITIVE_PARAMETER)
-                    result[key] = replaced
-                    changed = changed or replaced != item
-                    continue
+                if is_sensitive_name(key):
+                    if _holds_a_value(item):
+                        replaced = self._replace(
+                            str(item), where, RedactionRule.SENSITIVE_PARAMETER
+                        )
+                        result[key] = replaced
+                        changed = changed or replaced != item
+                        continue
+                    if isinstance(item, list):
+                        items = [
+                            self._redact_sensitive_list_item(entry, f"{where}[{index}]")
+                            for index, entry in enumerate(item)
+                        ]
+                        result[key] = [entry for entry, _ in items]
+                        changed = changed or any(item_changed for _, item_changed in items)
+                        continue
                 result[key], item_changed = self._redact_json_value(item, where)
                 changed = changed or item_changed
             return result, changed
@@ -432,6 +443,20 @@ class _Redactor:
             redacted = self._redact_text(value, location)
             return redacted, redacted != value
         return value, False
+
+    def _redact_sensitive_list_item(self, item: Any, location: str) -> tuple[Any, bool]:
+        """Redact one element of a list sitting directly under a credential named field.
+
+        A string or number in the list is itself a credential the field name already
+        named, the same as a scalar directly under that name would be, so it is
+        replaced whole rather than only matched by shape. An object or a nested list
+        carries no such name of its own, so it is walked into on its own terms instead,
+        the same as an object directly under the name is.
+        """
+        if _holds_a_value(item):
+            replaced = self._replace(str(item), location, RedactionRule.SENSITIVE_PARAMETER)
+            return replaced, replaced != item
+        return self._redact_json_value(item, location)
 
     def _redact_text_body(self, body: Body, location: str) -> Body:
         """Replace the credentials written into a body that is otherwise kept as observed."""
