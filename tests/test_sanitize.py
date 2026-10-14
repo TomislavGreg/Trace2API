@@ -348,6 +348,26 @@ class TestBodyRedaction:
         assert "sk_live_abc123" not in (entry.request.body.text or "")
         assert locations == ["request.body.tokens"]
 
+    def test_a_plain_string_in_a_credential_named_array_is_replaced(self) -> None:
+        body = json_body({"tokens": ["sk_live_abc123", "sk_live_def456"], "count": 2})
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        payload = json.loads(entry.request.body.text or "")
+        assert payload["count"] == 2
+        assert all(is_redacted(item) for item in payload["tokens"])
+        assert "sk_live_abc123" not in (entry.request.body.text or "")
+        assert "sk_live_def456" not in (entry.request.body.text or "")
+        assert locations == ["request.body.tokens[0]", "request.body.tokens[1]"]
+
+    def test_an_object_in_a_credential_named_array_is_walked_into(self) -> None:
+        body = json_body({"api_keys": [{"name": "ci", "api_key": "key-abc123"}]})
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        payload = json.loads(entry.request.body.text or "")
+        assert payload["api_keys"][0]["name"] == "ci"
+        assert is_redacted(payload["api_keys"][0]["api_key"])
+        assert locations == ["request.body.api_keys[0].api_key"]
+
     def test_a_credential_named_object_is_walked_into(self) -> None:
         body = json_body({"auth": {"scheme": "basic", "password": "hunter2"}})
         entry, locations = redact(make_capture(method="POST", request_body=body))
