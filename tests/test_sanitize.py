@@ -359,6 +359,18 @@ class TestBodyRedaction:
         assert "sk_live_def456" not in (entry.request.body.text or "")
         assert locations == ["request.body.tokens[0]", "request.body.tokens[1]"]
 
+    def test_a_plain_string_nested_in_a_further_array_level_is_replaced(self) -> None:
+        body = json_body({"tokens": [["sk_live_abc123"], "sk_live_def456"], "count": 2})
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        payload = json.loads(entry.request.body.text or "")
+        assert payload["count"] == 2
+        assert is_redacted(payload["tokens"][0][0])
+        assert is_redacted(payload["tokens"][1])
+        assert "sk_live_abc123" not in (entry.request.body.text or "")
+        assert "sk_live_def456" not in (entry.request.body.text or "")
+        assert locations == ["request.body.tokens[0][0]", "request.body.tokens[1]"]
+
     def test_an_object_in_a_credential_named_array_is_walked_into(self) -> None:
         body = json_body({"api_keys": [{"name": "ci", "api_key": "key-abc123"}]})
         entry, locations = redact(make_capture(method="POST", request_body=body))

@@ -449,13 +449,21 @@ class _Redactor:
 
         A string or number in the list is itself a credential the field name already
         named, the same as a scalar directly under that name would be, so it is
-        replaced whole rather than only matched by shape. An object or a nested list
-        carries no such name of its own, so it is walked into on its own terms instead,
-        the same as an object directly under the name is.
+        replaced whole rather than only matched by shape. A further list nested inside
+        carries no name of its own either, so the same treatment applies to its own
+        elements, however many levels deep the nesting goes. An object does carry names
+        of its own, so it is walked into on its own terms instead, the same as an object
+        directly under the name is.
         """
         if _holds_a_value(item):
             replaced = self._replace(str(item), location, RedactionRule.SENSITIVE_PARAMETER)
             return replaced, replaced != item
+        if isinstance(item, list):
+            items = [
+                self._redact_sensitive_list_item(entry, f"{location}[{index}]")
+                for index, entry in enumerate(item)
+            ]
+            return [entry for entry, _ in items], any(entry_changed for _, entry_changed in items)
         return self._redact_json_value(item, location)
 
     def _redact_text_body(self, body: Body, location: str) -> Body:

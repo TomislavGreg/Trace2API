@@ -1258,6 +1258,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-036 | Redact credential named or JWT shaped fields inside a multipart form body, which previously reached a capture unredacted. | Done | T2A-031 |
 | T2A-037 | Recognize a credential field name in its plural form, such as `tokens` or `api_keys`, which previously reached a capture unredacted. | Done | T2A-003 |
 | T2A-038 | Redact a plain string held in a JSON array under a credential named field, such as `{"tokens": ["sk_live_..."]}`, which still reaches a capture unredacted because an array is only ever walked into, never replaced as a whole. | Done | T2A-037 |
+| T2A-039 | Redact a plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, which still reached a capture unredacted because only the array's own elements, not an array nested inside it, inherited the field's name. | Done | T2A-038 |
 
 ### Phase 1: HAR to code
 
@@ -1582,6 +1583,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
@@ -1595,8 +1597,6 @@ them.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
 - 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
 - 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
-- 2026-09-29 - Added `trace2api paginate`, which reads two recordings of a workflow for the page-number, offset, or cursor value it used to move through a list of results.
-- 2026-09-27 - Added `trace2api test`, which writes a capture's verify check out as a Pytest module that rereads the capture and reruns the comparison each time it is invoked.
 
 ## License
 
