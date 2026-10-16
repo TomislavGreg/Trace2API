@@ -178,6 +178,25 @@ class TestPolicy:
         found = find_embedded_secrets('<meta name="api\nkey: rm -rf /\ntoken" content="s3cr3t">')
         assert found == ()
 
+    def test_a_sensitive_query_parameter_in_an_embedded_url_is_found(self) -> None:
+        text = "see https://api.example.test/items?page=2&api_key=key-abc123 for more"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.SENSITIVE_PARAMETER]
+        assert text[found[0].start : found[0].end] == "key-abc123"
+        assert found[0].name == "api_key"
+
+    def test_a_token_shaped_query_value_in_an_embedded_url_is_found(self) -> None:
+        text = f"https://api.example.test/next?cursor={FAKE_JWT}&limit=10"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.JWT_SHAPED_VALUE]
+        assert text[found[0].start : found[0].end] == FAKE_JWT
+
+    def test_an_ordinary_query_parameter_in_an_embedded_url_is_left_alone(self) -> None:
+        assert find_embedded_secrets("https://api.example.test/items?page=2&limit=10") == ()
+
+    def test_a_blank_query_value_in_an_embedded_url_is_left_alone(self) -> None:
+        assert find_embedded_secrets("https://api.example.test/items?api_key=") == ()
+
 
 class TestHeaderRedaction:
     def test_authorization_keeps_its_scheme(self) -> None:
@@ -558,6 +577,21 @@ class TestEmbeddedInText:
         assert "s3cr3t" not in text
         assert "<b>x</b>" in text
         assert locations == ["response.body.html.data-secret"]
+
+    def test_a_credential_in_a_pagination_link_is_redacted(self) -> None:
+        """A link handed back in one response and followed in the next can carry a key."""
+        response = Response(
+            status=200,
+            body=json_body(
+                {"next_page": "https://api.example.test/items?page=2&api_key=key-abc123"}
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "key-abc123" not in text
+        assert "https://api.example.test/items?page=2&api_key=" in text
+        assert locations == ["response.body.next_page.api_key"]
 
     def test_a_request_body_credential_is_reported_against_the_request(self) -> None:
         """A generated client reads the report to name the variable a value comes back under."""

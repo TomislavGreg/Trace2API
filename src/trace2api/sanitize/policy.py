@@ -11,6 +11,7 @@ import re
 from collections.abc import Iterator
 from enum import StrEnum
 from typing import NamedTuple
+from urllib.parse import unquote, urlsplit
 
 __all__ = [
     "COOKIE_HEADERS",
@@ -128,6 +129,11 @@ _EMBEDDED_TOKEN = re.compile(
 )
 """A JSON Web Token written into surrounding text, recognized by shape alone."""
 
+_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+"""A URL written into text, such as a pagination link or a callback address."""
+
+_URL_QUERY_PAIR = re.compile(r"(?P<name>[^&=]*)=(?P<value>[^&]*)")
+
 _HTML_META_TAG = re.compile(r"""<meta\b(?:"[^"]*"|'[^']*'|[^<>"'])*>""", re.IGNORECASE)
 """A ``meta`` element. Quoted attributes are read whole, since a value can hold ``>``."""
 
@@ -234,7 +240,12 @@ def find_embedded_secrets(text: str) -> tuple[EmbeddedSecret, ...]:
     same span: a token assigned to a named field is reported as the field it was given to.
     """
     candidates = sorted(
-        (*_find_assignments(text), *_find_meta_content(text), *_find_tokens(text)),
+        (
+            *_find_assignments(text),
+            *_find_meta_content(text),
+            *_find_url_query_secrets(text),
+            *_find_tokens(text),
+        ),
         key=lambda item: (item.start, -item.end),
     )
     found: list[EmbeddedSecret] = []
@@ -291,6 +302,38 @@ def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
                     RedactionRule.EMBEDDED_META_CONTENT,
                     named,
                 )
+
+
+def _find_url_query_secrets(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the credential shaped query values of a URL written into text.
+
+    A link embedded in a page, a script, or a JSON value, such as a pagination or
+    callback URL, can carry the same sensitive parameters a request's own URL does.
+    Only the value of a matching parameter is reported, so the rest of the link, and
+    the parameters that are not credentials, stay as observed.
+    """
+    for url_match in _URL_PATTERN.finditer(text):
+        query = urlsplit(url_match.group()).query
+        if not query:
+            continue
+        query_start = url_match.start() + url_match.group().index("?") + 1
+        for pair in _URL_QUERY_PAIR.finditer(query):
+            value = pair.group("value")
+            if not value:
+                continue
+            name = unquote(pair.group("name"))
+            if is_sensitive_query_name(name):
+                rule = RedactionRule.SENSITIVE_PARAMETER
+            elif is_jwt_shaped(unquote(value)):
+                rule = RedactionRule.JWT_SHAPED_VALUE
+            else:
+                continue
+            yield EmbeddedSecret(
+                query_start + pair.start("value"),
+                query_start + pair.end("value"),
+                rule,
+                name,
+            )
 
 
 def _find_tokens(text: str) -> Iterator[EmbeddedSecret]:
