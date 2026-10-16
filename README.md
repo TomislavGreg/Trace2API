@@ -1076,10 +1076,13 @@ capture taken once, is what `trace2api benchmark` reports.
   directly under the name is. A body that is not a structure redaction can read, such as
   a page or a script, is scanned as text instead, so a token assigned to a named field,
   handed over in a `meta` element, or written out in full is removed where it sits while
-  everything around it survives. A multipart form is read as the fields it is rather
-  than scanned as text: a field named for a credential, or one holding a JWT shaped
-  value, is redacted by its own boundary delimited part, while a file part's content and
-  any part this cannot make sense of is left as observed.
+  everything around it survives. The same scan reads a URL written into that text for a
+  credential named or token shaped query parameter, such as `api_key` on a pagination
+  link or a callback address, and redacts only that value, leaving the rest of the link
+  and its other parameters as observed. A multipart form is read as the fields it is
+  rather than scanned as text: a field named for a credential, or one holding a JWT
+  shaped value, is redacted by its own boundary delimited part, while a file part's
+  content and any part this cannot make sense of is left as observed.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1259,6 +1262,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-037 | Recognize a credential field name in its plural form, such as `tokens` or `api_keys`, which previously reached a capture unredacted. | Done | T2A-003 |
 | T2A-038 | Redact a plain string held in a JSON array under a credential named field, such as `{"tokens": ["sk_live_..."]}`, which still reaches a capture unredacted because an array is only ever walked into, never replaced as a whole. | Done | T2A-037 |
 | T2A-039 | Redact a plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, which still reached a capture unredacted because only the array's own elements, not an array nested inside it, inherited the field's name. | Done | T2A-038 |
+| T2A-040 | Redact a credential named or token shaped query parameter carried by a URL embedded in text, such as a pagination link or callback address in a JSON field, which previously reached a capture unredacted because only parameters on the request's own URL were checked. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1583,6 +1587,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-16 - A credential named or token shaped query parameter carried by a URL embedded in text, such as an `api_key` on a pagination link stored in a JSON field, is now redacted in place, closing a gap where only parameters on the request's own URL were checked.
 - 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
@@ -1596,7 +1601,6 @@ them.
 - 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
 - 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
-- 2026-09-30 - Added `trace2api graphql`, which reads a capture for the requests that carry a GraphQL operation and names each one's type, name, and variables.
 
 ## License
 
