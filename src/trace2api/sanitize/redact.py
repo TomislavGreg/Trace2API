@@ -24,6 +24,10 @@ same value also appears in a header, a query string, or a structured field.
 
 Nor does a credential named field hide its whole subtree: an object under such a name is
 walked into on its own terms, so its leaves are judged by their own names and shapes.
+
+A redirect's `Location` header is redacted the same way its `redirect_url` field already
+is: the two carry the same URL, and a credential in a query parameter is a credential
+whichever name it is read back under.
 """
 
 from __future__ import annotations
@@ -334,6 +338,11 @@ class _Redactor:
                 else self._redact_set_cookie(value, where)
             )
             return header.model_copy(update={"value": redacted})
+        if name == "location":
+            # A redirect response carries this same URL in its own `redirect_url`
+            # field, which is already redacted there; the header is the same value
+            # under a different name and needs the same treatment.
+            return header.model_copy(update={"value": self._redact_url(value, where)})
         if is_sensitive_header(name):
             return header.model_copy(
                 update={"value": self._replace(value, where, RedactionRule.SENSITIVE_HEADER)}

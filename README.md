@@ -1263,6 +1263,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-038 | Redact a plain string held in a JSON array under a credential named field, such as `{"tokens": ["sk_live_..."]}`, which still reaches a capture unredacted because an array is only ever walked into, never replaced as a whole. | Done | T2A-037 |
 | T2A-039 | Redact a plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, which still reached a capture unredacted because only the array's own elements, not an array nested inside it, inherited the field's name. | Done | T2A-038 |
 | T2A-040 | Redact a credential named or token shaped query parameter carried by a URL embedded in text, such as a pagination link or callback address in a JSON field, which previously reached a capture unredacted because only parameters on the request's own URL were checked. | Done | T2A-003 |
+| T2A-041 | Redact a credential carried by a response's `Location` header, which previously reached a capture unredacted even though the identical URL in the `redirect_url` field was already redacted. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1587,6 +1588,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-17 - A redirect's `Location` header is now redacted the same way its `redirect_url` field already was, closing a gap where the identical URL reached a capture unredacted under the header's name even though the field carrying it was sanitized.
 - 2026-10-16 - A credential named or token shaped query parameter carried by a URL embedded in text, such as an `api_key` on a pagination link stored in a JSON field, is now redacted in place, closing a gap where only parameters on the request's own URL were checked.
 - 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
@@ -1600,7 +1602,6 @@ them.
 - 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
 - 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 - 2026-10-02 - Added a naming provider interface so a second opinion on a value classification left unknown can plug in without classification depending on it or losing its determinism.
-- 2026-10-01 - Replay now reads a session cookie or CSRF token a flow traces to an earlier response live, instead of requiring it supplied in advance.
 
 ## License
 
