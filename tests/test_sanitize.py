@@ -267,6 +267,42 @@ class TestHeaderRedaction:
         assert value is not None and is_redacted(value)
         assert locations == ["request.headers.x-client-state"]
 
+    def test_location_header_credentials_are_removed(self) -> None:
+        response = Response(
+            status=302,
+            headers=Headers.from_pairs(
+                [("Location", "https://app.example.test/callback?code=abc123&state=xyz")]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("location") or ""
+        assert "abc123" not in value
+        assert "state=xyz" in value
+        assert locations == ["response.headers.location.query[code]"]
+
+    def test_location_header_userinfo_is_removed(self) -> None:
+        response = Response(
+            status=302,
+            headers=Headers.from_pairs([("Location", "https://demo:hunter2@app.example.test/")]),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("location") or ""
+        assert "hunter2" not in value
+        assert "demo" not in value
+        assert locations == ["response.headers.location.userinfo"]
+
+    def test_location_header_without_credentials_is_untouched(self) -> None:
+        response = Response(
+            status=302,
+            headers=Headers.from_pairs([("Location", "https://app.example.test/dashboard")]),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.headers.get("location") == "https://app.example.test/dashboard"
+        assert locations == []
+
     def test_unrelated_headers_are_untouched(self) -> None:
         headers = [("Accept", "application/json"), ("User-Agent", "trace2api-tests/1.0")]
         entry, locations = redact(make_capture(request_headers=headers))
