@@ -26,7 +26,8 @@ Nor does a credential named field hide its whole subtree: an object under such a
 walked into on its own terms, so its leaves are judged by their own names and shapes.
 
 A redirect's `Location` header is redacted the same way its `redirect_url` field already
-is: the two carry the same URL, and a credential in a query parameter is a credential
+is, and a request's `Referer` header is redacted the same way: each carries a URL a
+browser sent along on its own, and a credential in a query parameter is a credential
 whichever name it is read back under.
 """
 
@@ -79,6 +80,9 @@ _MULTIPART_DISPOSITION = re.compile(
 )
 _MULTIPART_NAME = re.compile(r'name\s*=\s*"((?:[^"\\]|\\.)*)"', re.IGNORECASE)
 _MULTIPART_FILENAME = re.compile(r'filename\s*=\s*"', re.IGNORECASE)
+
+_URL_VALUED_HEADERS = frozenset({"location", "referer"})
+"""Headers whose whole value is a URL, read the same way a request's own ``url`` is."""
 
 
 def is_redacted(value: str) -> bool:
@@ -338,10 +342,12 @@ class _Redactor:
                 else self._redact_set_cookie(value, where)
             )
             return header.model_copy(update={"value": redacted})
-        if name == "location":
-            # A redirect response carries this same URL in its own `redirect_url`
-            # field, which is already redacted there; the header is the same value
-            # under a different name and needs the same treatment.
+        if name in _URL_VALUED_HEADERS:
+            # A redirect response's `Location` header carries the same URL its own
+            # `redirect_url` field already redacts, and a request's `Referer` header
+            # carries the address of whatever page sent the request, query string and
+            # all; either can hold the same sensitive parameter a request's own URL
+            # does and gets the same treatment.
             return header.model_copy(update={"value": self._redact_url(value, where)})
         if is_sensitive_header(name):
             return header.model_copy(
