@@ -303,6 +303,35 @@ class TestHeaderRedaction:
         assert entry.response.headers.get("location") == "https://app.example.test/dashboard"
         assert locations == []
 
+    def test_referer_header_credentials_are_removed(self) -> None:
+        entry, locations = redact(
+            make_capture(
+                request_headers=[
+                    ("Referer", "https://app.example.test/dashboard?access_token=abc123&tab=home")
+                ]
+            )
+        )
+        value = entry.request.headers.get("referer") or ""
+        assert "abc123" not in value
+        assert "tab=home" in value
+        assert locations == ["request.headers.referer.query[access_token]"]
+
+    def test_referer_header_userinfo_is_removed(self) -> None:
+        entry, locations = redact(
+            make_capture(request_headers=[("Referer", "https://demo:hunter2@app.example.test/")])
+        )
+        value = entry.request.headers.get("referer") or ""
+        assert "hunter2" not in value
+        assert "demo" not in value
+        assert locations == ["request.headers.referer.userinfo"]
+
+    def test_referer_header_without_credentials_is_untouched(self) -> None:
+        entry, locations = redact(
+            make_capture(request_headers=[("Referer", "https://app.example.test/dashboard")])
+        )
+        assert entry.request.headers.get("referer") == "https://app.example.test/dashboard"
+        assert locations == []
+
     def test_unrelated_headers_are_untouched(self) -> None:
         headers = [("Accept", "application/json"), ("User-Agent", "trace2api-tests/1.0")]
         entry, locations = redact(make_capture(request_headers=headers))
