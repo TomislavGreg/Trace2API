@@ -1265,6 +1265,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-040 | Redact a credential named or token shaped query parameter carried by a URL embedded in text, such as a pagination link or callback address in a JSON field, which previously reached a capture unredacted because only parameters on the request's own URL were checked. | Done | T2A-003 |
 | T2A-041 | Redact a credential carried by a response's `Location` header, which previously reached a capture unredacted even though the identical URL in the `redirect_url` field was already redacted. | Done | T2A-003 |
 | T2A-042 | Redact a credential carried by a request's `Referer` header, which previously reached a capture unredacted even though the same URL sent as the request's own would already have been. | Done | T2A-003 |
+| T2A-043 | Redact a credential shaped query value carried by a response's `Link` header, which previously reached a capture unredacted even though the identical value in a pagination link embedded in a body was already redacted. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1589,6 +1590,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-20 - A response's `Link` header is now read for the same credential shaped query values a pagination link embedded in a body already is, closing a gap where an `api_key` or similar value on a next or previous page link reached a capture unredacted under the header's name.
 - 2026-10-19 - A request's `Referer` header is now redacted the same way its own `url` field already was, closing a gap where the page address a browser sent along, query string and all, reached a capture unredacted under the header's name.
 - 2026-10-17 - A redirect's `Location` header is now redacted the same way its `redirect_url` field already was, closing a gap where the identical URL reached a capture unredacted under the header's name even though the field carrying it was sanitized.
 - 2026-10-16 - A credential named or token shaped query parameter carried by a URL embedded in text, such as an `api_key` on a pagination link stored in a JSON field, is now redacted in place, closing a gap where only parameters on the request's own URL were checked.

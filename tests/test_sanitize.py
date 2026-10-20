@@ -332,6 +332,63 @@ class TestHeaderRedaction:
         assert entry.request.headers.get("referer") == "https://app.example.test/dashboard"
         assert locations == []
 
+    def test_link_header_credentials_are_removed(self) -> None:
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs(
+                [
+                    (
+                        "Link",
+                        '<https://api.example.test/orders?page=2&api_key=key-abc123>; rel="next"',
+                    )
+                ]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("link") or ""
+        assert "key-abc123" not in value
+        assert 'rel="next"' in value
+        assert locations == ["response.headers.link.api_key"]
+
+    def test_link_header_with_several_links_redacts_each(self) -> None:
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs(
+                [
+                    (
+                        "Link",
+                        '<https://api.example.test/orders?page=1&api_key=key-abc123>; rel="prev",'
+                        ' <https://api.example.test/orders?page=3&api_key=key-def456>; rel="next"',
+                    )
+                ]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("link") or ""
+        assert "key-abc123" not in value
+        assert "key-def456" not in value
+        assert locations == [
+            "response.headers.link.api_key",
+            "response.headers.link.api_key",
+        ]
+
+    def test_link_header_without_credentials_is_untouched(self) -> None:
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs(
+                [("Link", '<https://api.example.test/orders?page=2>; rel="next"')]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert (
+            entry.response.headers.get("link")
+            == '<https://api.example.test/orders?page=2>; rel="next"'
+        )
+        assert locations == []
+
     def test_unrelated_headers_are_untouched(self) -> None:
         headers = [("Accept", "application/json"), ("User-Agent", "trace2api-tests/1.0")]
         entry, locations = redact(make_capture(request_headers=headers))
