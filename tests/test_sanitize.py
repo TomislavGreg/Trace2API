@@ -389,6 +389,30 @@ class TestHeaderRedaction:
         )
         assert locations == []
 
+    def test_refresh_header_credentials_are_removed(self) -> None:
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs(
+                [("Refresh", "5; url=https://app.example.test/login?session_token=abc123")]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("refresh") or ""
+        assert "abc123" not in value
+        assert value.startswith("5; url=https://app.example.test/login?session_token=")
+        assert locations == ["response.headers.refresh.session_token"]
+
+    def test_refresh_header_without_credentials_is_untouched(self) -> None:
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs([("Refresh", "5; url=https://app.example.test/dashboard")]),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.headers.get("refresh") == "5; url=https://app.example.test/dashboard"
+        assert locations == []
+
     def test_unrelated_headers_are_untouched(self) -> None:
         headers = [("Accept", "application/json"), ("User-Agent", "trace2api-tests/1.0")]
         entry, locations = redact(make_capture(request_headers=headers))

@@ -1266,6 +1266,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-041 | Redact a credential carried by a response's `Location` header, which previously reached a capture unredacted even though the identical URL in the `redirect_url` field was already redacted. | Done | T2A-003 |
 | T2A-042 | Redact a credential carried by a request's `Referer` header, which previously reached a capture unredacted even though the same URL sent as the request's own would already have been. | Done | T2A-003 |
 | T2A-043 | Redact a credential shaped query value carried by a response's `Link` header, which previously reached a capture unredacted even though the identical value in a pagination link embedded in a body was already redacted. | Done | T2A-003 |
+| T2A-044 | Redact a credential shaped query value carried by a response's `Refresh` header, which previously reached a capture unredacted even though the same URL written into a page's own `<meta http-equiv="refresh">` element would already be. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1590,6 +1591,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-21 - A response's `Refresh` header is now read for the same credential shaped query values a page's own `<meta http-equiv="refresh">` element already is, closing a gap where a `session_token` or similar value on its destination reached a capture unredacted under the header's name.
 - 2026-10-20 - A response's `Link` header is now read for the same credential shaped query values a pagination link embedded in a body already is, closing a gap where an `api_key` or similar value on a next or previous page link reached a capture unredacted under the header's name.
 - 2026-10-19 - A request's `Referer` header is now redacted the same way its own `url` field already was, closing a gap where the page address a browser sent along, query string and all, reached a capture unredacted under the header's name.
 - 2026-10-17 - A redirect's `Location` header is now redacted the same way its `redirect_url` field already was, closing a gap where the identical URL reached a capture unredacted under the header's name even though the field carrying it was sanitized.
@@ -1604,7 +1606,6 @@ them.
 - 2026-10-06 - The package installs directly from the git repository with `pipx` or runs ad hoc with `uvx`, with no PyPI release needed for either; CI now builds the wheel and sdist on every run.
 - 2026-10-05 - The quick start now runs `inspect`, `compile`, and `verify` against a live `trace2api demo` instance, replacing the illustrative example with a capture actually replayed and matched.
 - 2026-10-04 - Added `trace2api benchmark`, which runs the demo workflow as a browser flow and as a compiled direct client against one freshly started instance and reports whether they agree.
-- 2026-10-03 - Added `trace2api demo`, a deterministic local order workflow app, and recorded two capture fixtures from it instead of writing them by hand.
 
 ## License
 
