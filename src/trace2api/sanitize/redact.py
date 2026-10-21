@@ -33,6 +33,10 @@ whichever name it is read back under.
 A `Link` header names one or more pages of results alongside other text rather than
 being a URL outright, so it is read the same way a pagination link embedded in a body
 already is: only the credential shaped query values around it move.
+
+A `Refresh` header is read the same way: it names a delay and a destination rather than
+being a URL outright, the same shape a page's own `<meta http-equiv="refresh">` already
+has when it is written into a body instead of sent as a header.
 """
 
 from __future__ import annotations
@@ -88,12 +92,16 @@ _MULTIPART_FILENAME = re.compile(r'filename\s*=\s*"', re.IGNORECASE)
 _URL_VALUED_HEADERS = frozenset({"location", "referer"})
 """Headers whose whole value is a URL, read the same way a request's own ``url`` is."""
 
-_EMBEDDED_URL_HEADERS = frozenset({"link"})
+_EMBEDDED_URL_HEADERS = frozenset({"link", "refresh"})
 """Headers that carry one or more URLs alongside other text, rather than being one.
 
 A ``Link`` header names a page of results the way a response body's own pagination
 link would, with the same query string a URL embedded in text already has redacted
 around it: ``<https://api.example.test/orders?page=2>; rel="next"``.
+
+A ``Refresh`` header asks a browser to navigate somewhere after a delay, the header
+form of a ``<meta http-equiv="refresh">`` element, and reads the same way:
+``5; url=https://api.example.test/login?session_token=abc123``.
 """
 
 
