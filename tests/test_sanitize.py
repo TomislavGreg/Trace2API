@@ -460,6 +460,33 @@ class TestUrlRedaction:
         assert "state=xyz" in entry.response.redirect_url
         assert locations == ["response.redirect_url.query[code]"]
 
+    def test_a_credential_carried_by_a_query_value_that_is_itself_a_url_is_redacted(
+        self,
+    ) -> None:
+        """A redirect or callback address sent as one query value can carry its own
+        credential shaped parameter, the same as one written into a JSON string
+        already does."""
+        url = (
+            "https://shop.example.test/auth"
+            "?redirect_uri=https%3A%2F%2Fpartner.example.test%2Fcallback%3Fapi_key%3Dkey-abc123"
+            "&status=open"
+        )
+        entry, locations = redact(make_capture(url=url))
+        query = entry.request.query
+        assert query.get("status") == "open"
+        assert "key-abc123" not in entry.request.url
+        assert "partner.example.test" in entry.request.url
+        assert locations == ["request.url.query[redirect_uri].api_key"]
+
+    def test_a_query_value_that_is_a_url_without_credentials_is_untouched(self) -> None:
+        url = (
+            "https://shop.example.test/auth"
+            "?redirect_uri=https%3A%2F%2Fpartner.example.test%2Fcallback%3Fpage%3D2"
+        )
+        entry, locations = redact(make_capture(url=url))
+        assert entry.request.url == url
+        assert locations == []
+
 
 class TestBodyRedaction:
     def test_json_fields_are_replaced_by_name(self) -> None:
@@ -585,6 +612,23 @@ class TestBodyRedaction:
         assert "username=demo" in text
         assert "hunter2" not in text and "xyz789" not in text
         assert locations == ["request.body[password]", "request.body[csrfmiddlewaretoken]"]
+
+    def test_a_credential_carried_by_a_form_value_that_is_itself_a_url_is_redacted(
+        self,
+    ) -> None:
+        body = Body(
+            mime_type="application/x-www-form-urlencoded",
+            text=(
+                "return_to=https%3A%2F%2Fpartner.example.test%2Fcallback%3Fapi_key%3Dkey-abc123"
+                "&status=open"
+            ),
+        )
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        text = entry.request.body.text or ""
+        assert "status=open" in text
+        assert "key-abc123" not in text
+        assert locations == ["request.body[return_to].api_key"]
 
     def test_body_without_credentials_is_returned_unchanged(self) -> None:
         body = json_body({"status": "open", "page": 2})
