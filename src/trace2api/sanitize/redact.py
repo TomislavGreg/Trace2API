@@ -37,6 +37,10 @@ already is: only the credential shaped query values around it move.
 A `Refresh` header is read the same way: it names a delay and a destination rather than
 being a URL outright, the same shape a page's own `<meta http-equiv="refresh">` already
 has when it is written into a body instead of sent as a header.
+
+A query parameter or a form field whose own value is a redirect or callback address is
+read for the same credential shaped query values that address would carry on a request
+of its own, the same as one embedded in a JSON string or a page's own text already is.
 """
 
 from __future__ import annotations
@@ -329,14 +333,16 @@ class _Redactor:
             if not value:
                 result.append((name, value))
                 continue
+            where = f"{location}[{name}]"
             if is_sensitive(name):
-                rule = RedactionRule.SENSITIVE_PARAMETER
+                replaced = self._replace(value, where, RedactionRule.SENSITIVE_PARAMETER)
             elif is_jwt_shaped(value):
-                rule = RedactionRule.JWT_SHAPED_VALUE
+                replaced = self._replace(value, where, RedactionRule.JWT_SHAPED_VALUE)
             else:
-                result.append((name, value))
-                continue
-            replaced = self._replace(value, f"{location}[{name}]", rule)
+                # The value itself may be a redirect or callback address carrying a
+                # credential shaped query parameter of its own, the same as one written
+                # into a JSON string or a page's own text already is.
+                replaced = self._redact_text(value, where)
             result.append((name, replaced))
             changed = changed or replaced != value
         return result if changed else None
