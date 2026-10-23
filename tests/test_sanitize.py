@@ -676,6 +676,38 @@ class TestBodyRedaction:
         assert entry.request.body == body
         assert locations == []
 
+    def test_a_credential_carried_by_a_multipart_value_that_is_itself_a_url_is_redacted(
+        self,
+    ) -> None:
+        """A multipart field that is not itself a credential can still hold a redirect
+        or callback address carrying one of its own, the same as a form field already
+        does."""
+        body = multipart_body(
+            [
+                (
+                    "redirect_uri",
+                    "https://partner.example.test/callback?api_key=key-abc123",
+                    None,
+                ),
+                ("status", "open", None),
+            ]
+        )
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body is not None
+        text = entry.request.body.text or ""
+        assert "status" in text and "open" in text
+        assert "key-abc123" not in text
+        assert "partner.example.test" in text
+        assert locations == ["request.body[redirect_uri].api_key"]
+
+    def test_a_multipart_value_that_is_a_url_without_credentials_is_untouched(self) -> None:
+        body = multipart_body(
+            [("redirect_uri", "https://partner.example.test/callback?page=2", None)]
+        )
+        entry, locations = redact(make_capture(method="POST", request_body=body))
+        assert entry.request.body == body
+        assert locations == []
+
     def test_multipart_without_a_declared_boundary_is_read_as_text(self) -> None:
         body = Body(
             mime_type="multipart/form-data",

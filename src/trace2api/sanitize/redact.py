@@ -41,6 +41,8 @@ has when it is written into a body instead of sent as a header.
 A query parameter or a form field whose own value is a redirect or callback address is
 read for the same credential shaped query values that address would carry on a request
 of its own, the same as one embedded in a JSON string or a page's own text already is.
+A multipart form field is read the same way once its own name is ruled out as a
+credential.
 """
 
 from __future__ import annotations
@@ -597,12 +599,14 @@ class _Redactor:
         name = name_match.group(1).replace('\\"', '"')
         where = f"{location}[{name}]"
         if is_sensitive_name(name):
-            rule = RedactionRule.SENSITIVE_PARAMETER
+            replaced = self._replace(value, where, RedactionRule.SENSITIVE_PARAMETER)
         elif is_jwt_shaped(value):
-            rule = RedactionRule.JWT_SHAPED_VALUE
+            replaced = self._replace(value, where, RedactionRule.JWT_SHAPED_VALUE)
         else:
-            return part, False
-        replaced = self._replace(value, where, rule)
+            # The field is not itself a credential, but its value may be a redirect or
+            # callback address carrying one of its own, the same as a JSON string, a
+            # form field, or a page's own text already is read for.
+            replaced = self._redact_text(value, where)
         if replaced == value:
             return part, False
         rebuilt = leading.group(0) + headers_text + blank.group(1) + replaced
