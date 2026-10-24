@@ -197,6 +197,16 @@ class TestPolicy:
     def test_a_blank_query_value_in_an_embedded_url_is_left_alone(self) -> None:
         assert find_embedded_secrets("https://api.example.test/items?api_key=") == ()
 
+    def test_a_sensitive_fragment_value_in_an_embedded_url_is_found(self) -> None:
+        text = "redirected to https://app.example.test/callback#access_token=tok-abc123&state=xyz"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.SENSITIVE_PARAMETER]
+        assert text[found[0].start : found[0].end] == "tok-abc123"
+        assert found[0].name == "access_token"
+
+    def test_a_plain_anchor_in_an_embedded_url_is_left_alone(self) -> None:
+        assert find_embedded_secrets("https://api.example.test/docs#section-2") == ()
+
 
 class TestHeaderRedaction:
     def test_authorization_keeps_its_scheme(self) -> None:
@@ -324,6 +334,25 @@ class TestHeaderRedaction:
         assert "hunter2" not in value
         assert "demo" not in value
         assert locations == ["request.headers.referer.userinfo"]
+
+    def test_location_header_fragment_credentials_are_removed(self) -> None:
+        response = Response(
+            status=302,
+            headers=Headers.from_pairs(
+                [
+                    (
+                        "Location",
+                        "https://app.example.test/callback#access_token=tok-abc123&state=xyz",
+                    )
+                ]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("location") or ""
+        assert "tok-abc123" not in value
+        assert "state=xyz" in value
+        assert locations == ["response.headers.location.fragment[access_token]"]
 
     def test_referer_header_without_credentials_is_untouched(self) -> None:
         entry, locations = redact(
@@ -483,6 +512,19 @@ class TestUrlRedaction:
             "https://shop.example.test/auth"
             "?redirect_uri=https%3A%2F%2Fpartner.example.test%2Fcallback%3Fpage%3D2"
         )
+        entry, locations = redact(make_capture(url=url))
+        assert entry.request.url == url
+        assert locations == []
+
+    def test_fragment_credentials_are_removed(self) -> None:
+        url = "https://app.example.test/callback#access_token=tok-abc123&token_type=Bearer"
+        entry, locations = redact(make_capture(url=url))
+        assert "tok-abc123" not in entry.request.url
+        assert "token_type=Bearer" in entry.request.url
+        assert locations == ["request.url.fragment[access_token]"]
+
+    def test_fragment_without_credentials_is_untouched(self) -> None:
+        url = "https://app.example.test/docs#section-2"
         entry, locations = redact(make_capture(url=url))
         assert entry.request.url == url
         assert locations == []
@@ -814,6 +856,21 @@ class TestEmbeddedInText:
         assert "key-abc123" not in text
         assert "https://api.example.test/items?page=2&api_key=" in text
         assert locations == ["response.body.next_page.api_key"]
+
+    def test_an_implicit_grant_token_embedded_in_a_body_is_redacted(self) -> None:
+        """An OAuth implicit grant returns its token in a fragment, not a query string."""
+        response = Response(
+            status=200,
+            body=json_body(
+                {"redirect_to": "https://app.example.test/callback#access_token=tok-abc123"}
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "tok-abc123" not in text
+        assert "https://app.example.test/callback#access_token=" in text
+        assert locations == ["response.body.redirect_to.access_token"]
 
     def test_a_request_body_credential_is_reported_against_the_request(self) -> None:
         """A generated client reads the report to name the variable a value comes back under."""

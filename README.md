@@ -1273,6 +1273,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-044 | Redact a credential shaped query value carried by a response's `Refresh` header, which previously reached a capture unredacted even though the same URL written into a page's own `<meta http-equiv="refresh">` element would already be. | Done | T2A-003 |
 | T2A-045 | Redact a credential shaped query value carried by a URL that is itself the value of a query parameter or a form field, such as a `redirect_uri` or `return_to` address, which previously reached a capture unredacted because only a JSON string or a page's own text was read for an embedded URL. | Done | T2A-003 |
 | T2A-046 | Redact a credential shaped query value carried by a URL that is itself the value of a multipart form field, which previously reached a capture unredacted because a multipart field not itself named for a credential was never read for one embedded in its value. | Done | T2A-036, T2A-045 |
+| T2A-047 | Redact a credential shaped value carried by a URL's fragment, such as the `access_token` an OAuth implicit grant returns there instead of in the query, which previously reached a capture unredacted because only a URL's query string was read this way. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1597,6 +1598,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-24 - A URL's fragment is now read for credential shaped values the same way its query string already is, wherever that URL is redacted, closing a gap where an OAuth implicit grant's `access_token` reached a capture unredacted because only a URL's query string was checked this way.
 - 2026-10-23 - A multipart form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a field such as `redirect_uri` reached a capture unredacted because only a JSON string or a form field was read for an embedded URL this way.
 - 2026-10-22 - A query parameter or a form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a `redirect_uri` or `return_to` value reached a capture unredacted.
 - 2026-10-21 - A response's `Refresh` header is now read for the same credential shaped query values a page's own `<meta http-equiv="refresh">` element already is, closing a gap where a `session_token` or similar value on its destination reached a capture unredacted under the header's name.
@@ -1610,7 +1612,6 @@ them.
 - 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-10 - `compile --target javascript` now resolves a link into a form encoded payload the same way the Python target does, encoding the value through `encodeURIComponent` where the capture observed the field; only a repeated header read by position still falls back to replaying it as observed.
 - 2026-10-08 - `compile` now takes `--target javascript`, writing the same dependency graph as an ES module using `fetch` instead of a Python one; a value that would need rewriting a form payload or reading a repeated header by position is replayed as observed and named, since `fetch` has no way to do either.
-- 2026-10-07 - Added `CHANGELOG.md` and `RELEASING.md`, bumped the package to v0.1.0, and recorded T2A-030 as done, closing out the Phase 6 ticket board.
 
 ## License
 

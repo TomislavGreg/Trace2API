@@ -305,35 +305,45 @@ def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
 
 
 def _find_url_query_secrets(text: str) -> Iterator[EmbeddedSecret]:
-    """Yield the credential shaped query values of a URL written into text.
+    """Yield the credential shaped query and fragment values of a URL written into text.
 
     A link embedded in a page, a script, or a JSON value, such as a pagination or
-    callback URL, can carry the same sensitive parameters a request's own URL does.
-    Only the value of a matching parameter is reported, so the rest of the link, and
-    the parameters that are not credentials, stay as observed.
+    callback URL, can carry the same sensitive parameters a request's own URL does,
+    either in its query string or, for an OAuth implicit grant returning its token
+    that way instead, in its fragment. Only the value of a matching parameter is
+    reported, so the rest of the link, and the parameters that are not credentials,
+    stay as observed.
     """
     for url_match in _URL_PATTERN.finditer(text):
-        query = urlsplit(url_match.group()).query
-        if not query:
+        url = url_match.group()
+        parts = urlsplit(url)
+        if parts.query:
+            query_start = url_match.start() + url.index("?") + 1
+            yield from _find_pair_secrets(parts.query, query_start)
+        if parts.fragment:
+            fragment_start = url_match.start() + url.index("#") + 1
+            yield from _find_pair_secrets(parts.fragment, fragment_start)
+
+
+def _find_pair_secrets(pairs_text: str, offset: int) -> Iterator[EmbeddedSecret]:
+    """Yield the credential shaped values among ``name=value`` pairs found at ``offset``."""
+    for pair in _URL_QUERY_PAIR.finditer(pairs_text):
+        value = pair.group("value")
+        if not value:
             continue
-        query_start = url_match.start() + url_match.group().index("?") + 1
-        for pair in _URL_QUERY_PAIR.finditer(query):
-            value = pair.group("value")
-            if not value:
-                continue
-            name = unquote(pair.group("name"))
-            if is_sensitive_query_name(name):
-                rule = RedactionRule.SENSITIVE_PARAMETER
-            elif is_jwt_shaped(unquote(value)):
-                rule = RedactionRule.JWT_SHAPED_VALUE
-            else:
-                continue
-            yield EmbeddedSecret(
-                query_start + pair.start("value"),
-                query_start + pair.end("value"),
-                rule,
-                name,
-            )
+        name = unquote(pair.group("name"))
+        if is_sensitive_query_name(name):
+            rule = RedactionRule.SENSITIVE_PARAMETER
+        elif is_jwt_shaped(unquote(value)):
+            rule = RedactionRule.JWT_SHAPED_VALUE
+        else:
+            continue
+        yield EmbeddedSecret(
+            offset + pair.start("value"),
+            offset + pair.end("value"),
+            rule,
+            name,
+        )
 
 
 def _find_tokens(text: str) -> Iterator[EmbeddedSecret]:
