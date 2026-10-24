@@ -43,6 +43,12 @@ read for the same credential shaped query values that address would carry on a r
 of its own, the same as one embedded in a JSON string or a page's own text already is.
 A multipart form field is read the same way once its own name is ruled out as a
 credential.
+
+A URL's fragment is read for credential shaped values the same way its query string
+already is, wherever that URL is redacted: a request's own `url`, a `redirect_url`, a
+`Location` or `Referer` header, or one embedded in text. An OAuth implicit grant
+returns its access token there instead of in the query so a browser never sends it to
+a server, and the fragment was otherwise carried through untouched.
 """
 
 from __future__ import annotations
@@ -316,9 +322,25 @@ class _Redactor:
             if redacted is not None:
                 query = urlencode(redacted)
 
-        if netloc == parts.netloc and query == parts.query:
+        fragment = parts.fragment
+        if fragment:
+            fragment = self._redact_fragment(fragment, f"{location}.fragment")
+
+        if netloc == parts.netloc and query == parts.query and fragment == parts.fragment:
             return url
-        return urlunsplit((parts.scheme, netloc, parts.path, query, parts.fragment))
+        return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
+
+    def _redact_fragment(self, fragment: str, location: str) -> str:
+        """Redact a URL fragment the same way its query string already is.
+
+        An OAuth implicit grant returns its token this way instead of in the query, so
+        a browser's own address bar never sends it to a server:
+        ``#access_token=abc123&token_type=Bearer&state=xyz``. A plain anchor such as
+        ``#section-2`` parses as one pair with no value and is left alone.
+        """
+        pairs = parse_qsl(fragment, keep_blank_values=True)
+        redacted = self._redact_pairs(pairs, location=location, query=True)
+        return urlencode(redacted) if redacted is not None else fragment
 
     def _redact_pairs(
         self,
