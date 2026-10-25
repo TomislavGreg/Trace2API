@@ -30,13 +30,11 @@ is, and a request's `Referer` header is redacted the same way: each carries a UR
 browser sent along on its own, and a credential in a query parameter is a credential
 whichever name it is read back under.
 
-A `Link` header names one or more pages of results alongside other text rather than
-being a URL outright, so it is read the same way a pagination link embedded in a body
-already is: only the credential shaped query values around it move.
-
-A `Refresh` header is read the same way: it names a delay and a destination rather than
-being a URL outright, the same shape a page's own `<meta http-equiv="refresh">` already
-has when it is written into a body instead of sent as a header.
+A header that is not one of the above, such as a `Link` naming one or more pages of
+results alongside other text, or a `Refresh` naming a delay and a destination, is read
+the same way a page's own text already is: only the credential shaped values embedded
+in it move, whatever the header is called. This is what catches a custom pagination or
+callback header a server happens to send, without needing its name listed here first.
 
 A query parameter or a form field whose own value is a redirect or callback address is
 read for the same credential shaped query values that address would carry on a request
@@ -103,18 +101,6 @@ _MULTIPART_FILENAME = re.compile(r'filename\s*=\s*"', re.IGNORECASE)
 
 _URL_VALUED_HEADERS = frozenset({"location", "referer"})
 """Headers whose whole value is a URL, read the same way a request's own ``url`` is."""
-
-_EMBEDDED_URL_HEADERS = frozenset({"link", "refresh"})
-"""Headers that carry one or more URLs alongside other text, rather than being one.
-
-A ``Link`` header names a page of results the way a response body's own pagination
-link would, with the same query string a URL embedded in text already has redacted
-around it: ``<https://api.example.test/orders?page=2>; rel="next"``.
-
-A ``Refresh`` header asks a browser to navigate somewhere after a delay, the header
-form of a ``<meta http-equiv="refresh">`` element, and reads the same way:
-``5; url=https://api.example.test/login?session_token=abc123``.
-"""
 
 
 def is_redacted(value: str) -> bool:
@@ -399,8 +385,6 @@ class _Redactor:
             # all; either can hold the same sensitive parameter a request's own URL
             # does and gets the same treatment.
             return header.model_copy(update={"value": self._redact_url(value, where)})
-        if name in _EMBEDDED_URL_HEADERS:
-            return header.model_copy(update={"value": self._redact_text(value, where)})
         if is_sensitive_header(name):
             return header.model_copy(
                 update={"value": self._replace(value, where, RedactionRule.SENSITIVE_HEADER)}
@@ -409,7 +393,11 @@ class _Redactor:
             return header.model_copy(
                 update={"value": self._replace(value, where, RedactionRule.JWT_SHAPED_VALUE)}
             )
-        return header
+        # Whatever this header is called, it may still carry a credential shaped value
+        # alongside other text the same way a page's own markup does: a `Link` naming a
+        # page of results, a `Refresh` naming a delay and a destination, or a header
+        # this project has never seen before doing much the same thing.
+        return header.model_copy(update={"value": self._redact_text(value, where)})
 
     def _redact_credential(self, value: str, location: str) -> str:
         """Redact an ``Authorization`` style value, keeping the scheme it announces."""

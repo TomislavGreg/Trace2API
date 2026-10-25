@@ -449,6 +449,30 @@ class TestHeaderRedaction:
         assert entry.request.headers.get("user-agent") == "trace2api-tests/1.0"
         assert locations == []
 
+    def test_a_credential_in_an_unrecognized_header_is_still_removed(self) -> None:
+        """A server can name a pagination or callback header anything it likes, so the
+        same credential shaped query value a `Link` header already carries is read the
+        same way regardless of what the header carrying it is called."""
+        response = Response(
+            status=200,
+            headers=Headers.from_pairs(
+                [("X-Next-Page", "https://api.example.test/orders?page=2&api_key=key-abc123")]
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        value = entry.response.headers.get("x-next-page") or ""
+        assert "key-abc123" not in value
+        assert "page=2" in value
+        assert locations == ["response.headers.x-next-page.api_key"]
+
+    def test_an_unrecognized_header_without_credentials_is_untouched(self) -> None:
+        headers = [("X-Request-Id", "req-20260904-0001"), ("X-Cache", "HIT")]
+        entry, locations = redact(make_capture(request_headers=headers))
+        assert entry.request.headers.get("x-request-id") == "req-20260904-0001"
+        assert entry.request.headers.get("x-cache") == "HIT"
+        assert locations == []
+
 
 class TestUrlRedaction:
     def test_credential_query_parameters_are_replaced(self) -> None:
