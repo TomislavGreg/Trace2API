@@ -1086,7 +1086,10 @@ capture taken once, is what `trace2api benchmark` reports.
   parameter, a form field, or a multipart field whose own value is a redirect or
   callback address is read the same way a page's own text is, so a credential shaped
   query value it carries is redacted without touching the rest of the address or the
-  field around it.
+  field around it. A header this project has no specific rule for is read the same way
+  as well, rather than passed through untouched, so a server naming its own pagination
+  or callback header carries the same protection a `Link` or `Refresh` header already
+  gets without that name having to be listed first.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1274,6 +1277,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-045 | Redact a credential shaped query value carried by a URL that is itself the value of a query parameter or a form field, such as a `redirect_uri` or `return_to` address, which previously reached a capture unredacted because only a JSON string or a page's own text was read for an embedded URL. | Done | T2A-003 |
 | T2A-046 | Redact a credential shaped query value carried by a URL that is itself the value of a multipart form field, which previously reached a capture unredacted because a multipart field not itself named for a credential was never read for one embedded in its value. | Done | T2A-036, T2A-045 |
 | T2A-047 | Redact a credential shaped value carried by a URL's fragment, such as the `access_token` an OAuth implicit grant returns there instead of in the query, which previously reached a capture unredacted because only a URL's query string was read this way. | Done | T2A-003 |
+| T2A-048 | Redact a credential shaped query value carried by a URL embedded in a header this project has no specific rule for, such as a custom pagination or callback header, which previously reached a capture unredacted because only `Link` and `Refresh` were read this way. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1598,6 +1602,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-25 - A header this project has no specific rule for is now read for the same credential shaped query values a `Link` or `Refresh` header already is, closing a gap where a custom pagination or callback header reached a capture unredacted because only those two names were checked this way.
 - 2026-10-24 - A URL's fragment is now read for credential shaped values the same way its query string already is, wherever that URL is redacted, closing a gap where an OAuth implicit grant's `access_token` reached a capture unredacted because only a URL's query string was checked this way.
 - 2026-10-23 - A multipart form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a field such as `redirect_uri` reached a capture unredacted because only a JSON string or a form field was read for an embedded URL this way.
 - 2026-10-22 - A query parameter or a form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a `redirect_uri` or `return_to` value reached a capture unredacted.
@@ -1611,7 +1616,6 @@ them.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-10 - `compile --target javascript` now resolves a link into a form encoded payload the same way the Python target does, encoding the value through `encodeURIComponent` where the capture observed the field; only a repeated header read by position still falls back to replaying it as observed.
-- 2026-10-08 - `compile` now takes `--target javascript`, writing the same dependency graph as an ES module using `fetch` instead of a Python one; a value that would need rewriting a form payload or reading a repeated header by position is replayed as observed and named, since `fetch` has no way to do either.
 
 ## License
 
