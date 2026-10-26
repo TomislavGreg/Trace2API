@@ -553,6 +553,34 @@ class TestUrlRedaction:
         assert entry.request.url == url
         assert locations == []
 
+    def test_a_jwt_shaped_path_segment_is_redacted(self) -> None:
+        """A password reset or magic link token is often a path segment rather than a
+        query parameter, and carried no name of its own for any rule to catch it by."""
+        url = f"https://app.example.test/reset-password/{FAKE_JWT}"
+        entry, locations = redact(make_capture(url=url))
+        assert FAKE_JWT not in entry.request.url
+        assert entry.request.url.startswith("https://app.example.test/reset-password/")
+        assert locations == ["request.url.path"]
+
+    def test_a_jwt_shaped_redirect_target_path_segment_is_redacted(self) -> None:
+        response = Response(
+            status=302,
+            redirect_url=f"https://app.example.test/magic-link/{FAKE_JWT}",
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.redirect_url is not None
+        assert FAKE_JWT not in entry.response.redirect_url
+        assert locations == ["response.redirect_url.path"]
+
+    def test_an_ordinary_path_segment_is_untouched(self) -> None:
+        """An opaque identifier that is not a recognized shape is left alone: a path
+        segment names nothing of its own for a rule to judge it by."""
+        url = "https://api.example.test/v1/orders/4711"
+        entry, locations = redact(make_capture(url=url))
+        assert entry.request.url == url
+        assert locations == []
+
 
 class TestBodyRedaction:
     def test_json_fields_are_replaced_by_name(self) -> None:

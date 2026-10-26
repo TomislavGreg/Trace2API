@@ -1278,6 +1278,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-046 | Redact a credential shaped query value carried by a URL that is itself the value of a multipart form field, which previously reached a capture unredacted because a multipart field not itself named for a credential was never read for one embedded in its value. | Done | T2A-036, T2A-045 |
 | T2A-047 | Redact a credential shaped value carried by a URL's fragment, such as the `access_token` an OAuth implicit grant returns there instead of in the query, which previously reached a capture unredacted because only a URL's query string was read this way. | Done | T2A-003 |
 | T2A-048 | Redact a credential shaped query value carried by a URL embedded in a header this project has no specific rule for, such as a custom pagination or callback header, which previously reached a capture unredacted because only `Link` and `Refresh` were read this way. | Done | T2A-003 |
+| T2A-049 | Redact a JWT shaped credential carried by a URL's own path segment, such as a password reset or magic link token, which previously reached a capture unredacted because a URL's path was never read at all. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1602,6 +1603,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-26 - A URL's own path is now read for a JWT shaped credential the same way free standing text already is, wherever that URL is redacted, closing a gap where a password reset or magic link token carried as a path segment reached a capture unredacted because nothing read the path at all.
 - 2026-10-25 - A header this project has no specific rule for is now read for the same credential shaped query values a `Link` or `Refresh` header already is, closing a gap where a custom pagination or callback header reached a capture unredacted because only those two names were checked this way.
 - 2026-10-24 - A URL's fragment is now read for credential shaped values the same way its query string already is, wherever that URL is redacted, closing a gap where an OAuth implicit grant's `access_token` reached a capture unredacted because only a URL's query string was checked this way.
 - 2026-10-23 - A multipart form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a field such as `redirect_uri` reached a capture unredacted because only a JSON string or a form field was read for an embedded URL this way.
@@ -1615,7 +1617,6 @@ them.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
 - 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
-- 2026-10-10 - `compile --target javascript` now resolves a link into a form encoded payload the same way the Python target does, encoding the value through `encodeURIComponent` where the capture observed the field; only a repeated header read by position still falls back to replaying it as observed.
 
 ## License
 
