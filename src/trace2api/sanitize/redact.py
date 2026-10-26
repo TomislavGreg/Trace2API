@@ -47,6 +47,14 @@ already is, wherever that URL is redacted: a request's own `url`, a `redirect_ur
 `Location` or `Referer` header, or one embedded in text. An OAuth implicit grant
 returns its access token there instead of in the query so a browser never sends it to
 a server, and the fragment was otherwise carried through untouched.
+
+A URL's path is read for a credential shaped value the same way free standing text
+already is, wherever that URL is redacted. A password reset or magic link token is
+often carried as a path segment rather than a query parameter, and it had passed
+through untouched because nothing read the path at all. A segment with no shape a
+rule recognizes, such as an ordinary identifier, is left as observed: a path segment
+names nothing of its own, so only a value a shape rule catches, such as a JWT, is
+found this way.
 """
 
 from __future__ import annotations
@@ -301,6 +309,14 @@ class _Redactor:
             )
             netloc = f"{placeholder}@{host}"
 
+        path = parts.path
+        if path:
+            # A password reset or magic link token is often a path segment rather
+            # than a query parameter, such as /reset-password/<jwt>. It carries no
+            # name of its own to judge, so only a value recognized by shape, such as
+            # a JWT, is caught here; an opaque identifier that is not is left alone.
+            path = self._redact_text(path, f"{location}.path")
+
         query = parts.query
         if query:
             pairs = parse_qsl(query, keep_blank_values=True)
@@ -312,9 +328,14 @@ class _Redactor:
         if fragment:
             fragment = self._redact_fragment(fragment, f"{location}.fragment")
 
-        if netloc == parts.netloc and query == parts.query and fragment == parts.fragment:
+        if (
+            netloc == parts.netloc
+            and path == parts.path
+            and query == parts.query
+            and fragment == parts.fragment
+        ):
             return url
-        return urlunsplit((parts.scheme, netloc, parts.path, query, fragment))
+        return urlunsplit((parts.scheme, netloc, path, query, fragment))
 
     def _redact_fragment(self, fragment: str, location: str) -> str:
         """Redact a URL fragment the same way its query string already is.
