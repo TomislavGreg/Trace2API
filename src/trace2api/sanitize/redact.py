@@ -55,6 +55,13 @@ through untouched because nothing read the path at all. A segment with no shape 
 rule recognizes, such as an ordinary identifier, is left as observed: a path segment
 names nothing of its own, so only a value a shape rule catches, such as a JWT, is
 found this way.
+
+A URL embedded in text, such as a pagination link in a JSON field or a callback
+address in a page, is now read for a username and password in its own userinfo the
+same way a request's own `url`, a `redirect_url`, or a `Location` or `Referer`
+header already is. Only a request or response's own URL was read this way before,
+so a credential such as `https://user:pass@` written into a body, a script, or a
+header with no specific rule reached a capture unredacted.
 """
 
 from __future__ import annotations

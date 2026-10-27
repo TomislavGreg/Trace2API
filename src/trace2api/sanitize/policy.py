@@ -243,7 +243,7 @@ def find_embedded_secrets(text: str) -> tuple[EmbeddedSecret, ...]:
         (
             *_find_assignments(text),
             *_find_meta_content(text),
-            *_find_url_query_secrets(text),
+            *_find_url_secrets(text),
             *_find_tokens(text),
         ),
         key=lambda item: (item.start, -item.end),
@@ -304,19 +304,28 @@ def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
                 )
 
 
-def _find_url_query_secrets(text: str) -> Iterator[EmbeddedSecret]:
-    """Yield the credential shaped query and fragment values of a URL written into text.
+def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the credential shaped parts of a URL written into text.
 
     A link embedded in a page, a script, or a JSON value, such as a pagination or
-    callback URL, can carry the same sensitive parameters a request's own URL does,
-    either in its query string or, for an OAuth implicit grant returning its token
-    that way instead, in its fragment. Only the value of a matching parameter is
-    reported, so the rest of the link, and the parameters that are not credentials,
-    stay as observed.
+    callback URL, can carry the same credentials a request's own URL does: a username
+    and password in its userinfo, a sensitive parameter in its query string, or, for
+    an OAuth implicit grant returning its token that way instead, in its fragment.
+    Only the credential itself is reported, so the rest of the link, and whatever is
+    not a credential, stays as observed.
     """
     for url_match in _URL_PATTERN.finditer(text):
         url = url_match.group()
         parts = urlsplit(url)
+        if parts.username is not None or parts.password is not None:
+            netloc_start = url_match.start() + url.index("://") + 3
+            userinfo = parts.netloc.rpartition("@")[0]
+            yield EmbeddedSecret(
+                netloc_start,
+                netloc_start + len(userinfo),
+                RedactionRule.URL_USERINFO,
+                "userinfo",
+            )
         if parts.query:
             query_start = url_match.start() + url.index("?") + 1
             yield from _find_pair_secrets(parts.query, query_start)
