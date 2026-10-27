@@ -1089,7 +1089,9 @@ capture taken once, is what `trace2api benchmark` reports.
   field around it. A header this project has no specific rule for is read the same way
   as well, rather than passed through untouched, so a server naming its own pagination
   or callback header carries the same protection a `Link` or `Refresh` header already
-  gets without that name having to be listed first.
+  gets without that name having to be listed first. A URL embedded in text is also read
+  for a username and password in its own userinfo, such as `https://user:pass@` on a
+  webhook or callback address, the same as a request or response's own URL already is.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1279,6 +1281,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-047 | Redact a credential shaped value carried by a URL's fragment, such as the `access_token` an OAuth implicit grant returns there instead of in the query, which previously reached a capture unredacted because only a URL's query string was read this way. | Done | T2A-003 |
 | T2A-048 | Redact a credential shaped query value carried by a URL embedded in a header this project has no specific rule for, such as a custom pagination or callback header, which previously reached a capture unredacted because only `Link` and `Refresh` were read this way. | Done | T2A-003 |
 | T2A-049 | Redact a JWT shaped credential carried by a URL's own path segment, such as a password reset or magic link token, which previously reached a capture unredacted because a URL's path was never read at all. | Done | T2A-003 |
+| T2A-050 | Redact a username and password carried by the userinfo of a URL embedded in text, such as a webhook address in a JSON field or a callback link in a page, which previously reached a capture unredacted because only a request or response's own URL, or a `Location` or `Referer` header, read a URL's userinfo this way. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1603,6 +1606,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-27 - A URL embedded in text is now read for a username and password in its own userinfo the same way a request or response's own URL already is, closing a gap where a webhook or callback address such as `https://user:pass@host` written into a body, a script, or a header with no specific rule reached a capture unredacted.
 - 2026-10-26 - A URL's own path is now read for a JWT shaped credential the same way free standing text already is, wherever that URL is redacted, closing a gap where a password reset or magic link token carried as a path segment reached a capture unredacted because nothing read the path at all.
 - 2026-10-25 - A header this project has no specific rule for is now read for the same credential shaped query values a `Link` or `Refresh` header already is, closing a gap where a custom pagination or callback header reached a capture unredacted because only those two names were checked this way.
 - 2026-10-24 - A URL's fragment is now read for credential shaped values the same way its query string already is, wherever that URL is redacted, closing a gap where an OAuth implicit grant's `access_token` reached a capture unredacted because only a URL's query string was checked this way.
@@ -1616,7 +1620,6 @@ them.
 - 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 - 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
-- 2026-10-11 - Multipart form fields are now read as the fields they are rather than scanned as text: a field named for a credential, or one holding a JWT shaped value, is redacted in place, closing a gap where such a field previously reached a capture unredacted.
 
 ## License
 
