@@ -217,6 +217,22 @@ class TestPolicy:
     def test_an_embedded_url_without_userinfo_is_left_alone(self) -> None:
         assert find_embedded_secrets("https://app.example.test/webhook") == ()
 
+    def test_a_credential_nested_inside_an_embedded_url_is_found(self) -> None:
+        """A query value of an embedded link can itself be a link carrying a
+        credential of its own, the same as one on a request's own URL already is."""
+        text = (
+            "see https://api.example.test/go"
+            "?redirect_uri=https://partner.example.test/cb?api_key=key-abc123 for more"
+        )
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.SENSITIVE_PARAMETER]
+        assert text[found[0].start : found[0].end] == "key-abc123"
+        assert found[0].name == "redirect_uri.api_key"
+
+    def test_an_embedded_url_nested_without_a_credential_is_left_alone(self) -> None:
+        text = "https://api.example.test/go?redirect_uri=https://partner.example.test/cb?page=2"
+        assert find_embedded_secrets(text) == ()
+
 
 class TestHeaderRedaction:
     def test_authorization_keeps_its_scheme(self) -> None:
@@ -946,6 +962,46 @@ class TestEmbeddedInText:
         assert "hunter2" not in text and "demo" not in text
         assert "@partner.example.test/notify" in text
         assert locations == ["response.body.webhook_url.userinfo"]
+
+    def test_a_credential_nested_inside_a_linked_url_is_redacted(self) -> None:
+        """A pagination link can itself point onward to a callback address that
+        carries a credential of its own, one hop further than the link embedded
+        in the body."""
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "next_page": (
+                        "https://api.example.test/go"
+                        "?redirect_uri=https://partner.example.test/cb?api_key=key-abc123"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "key-abc123" not in text
+        assert "https://api.example.test/go?redirect_uri=" in text
+        assert "partner.example.test/cb?api_key=" in text
+        assert locations == ["response.body.next_page.redirect_uri.api_key"]
+
+    def test_a_linked_url_without_a_nested_credential_is_untouched(self) -> None:
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "next_page": (
+                        "https://api.example.test/go"
+                        "?redirect_uri=https://partner.example.test/cb?page=2"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.body == response.body
+        assert locations == []
 
     def test_a_request_body_credential_is_reported_against_the_request(self) -> None:
         """A generated client reads the report to name the variable a value comes back under."""

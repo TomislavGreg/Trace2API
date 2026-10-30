@@ -1282,6 +1282,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-048 | Redact a credential shaped query value carried by a URL embedded in a header this project has no specific rule for, such as a custom pagination or callback header, which previously reached a capture unredacted because only `Link` and `Refresh` were read this way. | Done | T2A-003 |
 | T2A-049 | Redact a JWT shaped credential carried by a URL's own path segment, such as a password reset or magic link token, which previously reached a capture unredacted because a URL's path was never read at all. | Done | T2A-003 |
 | T2A-050 | Redact a username and password carried by the userinfo of a URL embedded in text, such as a webhook address in a JSON field or a callback link in a page, which previously reached a capture unredacted because only a request or response's own URL, or a `Location` or `Referer` header, read a URL's userinfo this way. | Done | T2A-003 |
+| T2A-051 | Redact a credential carried by a query or fragment value of a URL embedded in text, when that value is itself a redirect or callback link, which previously reached a capture unredacted because only such a value on a request's own URL or in a form field was read for a credential nested one link further in. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1606,6 +1607,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-30 - A query or fragment value of a URL embedded in text is now read for a credential of its own when that value is itself a redirect or callback link, the same way such a value already is on a request's own URL or in a form field, closing a gap where an `api_key` or a userinfo credential one link further in reached a capture unredacted.
 - 2026-10-27 - A URL embedded in text is now read for a username and password in its own userinfo the same way a request or response's own URL already is, closing a gap where a webhook or callback address such as `https://user:pass@host` written into a body, a script, or a header with no specific rule reached a capture unredacted.
 - 2026-10-26 - A URL's own path is now read for a JWT shaped credential the same way free standing text already is, wherever that URL is redacted, closing a gap where a password reset or magic link token carried as a path segment reached a capture unredacted because nothing read the path at all.
 - 2026-10-25 - A header this project has no specific rule for is now read for the same credential shaped query values a `Link` or `Refresh` header already is, closing a gap where a custom pagination or callback header reached a capture unredacted because only those two names were checked this way.
@@ -1619,7 +1621,6 @@ them.
 - 2026-10-16 - A credential named or token shaped query parameter carried by a URL embedded in text, such as an `api_key` on a pagination link stored in a JSON field, is now redacted in place, closing a gap where only parameters on the request's own URL were checked.
 - 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
 - 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
-- 2026-10-12 - Credential field names are now recognized in their plural form as well, so `tokens` or `api_keys` is redacted the same way `token` or `api_key` already was, closing a gap where such a field previously reached a capture unredacted.
 
 ## License
 
