@@ -62,6 +62,12 @@ same way a request's own `url`, a `redirect_url`, or a `Location` or `Referer`
 header already is. Only a request or response's own URL was read this way before,
 so a credential such as `https://user:pass@` written into a body, a script, or a
 header with no specific rule reached a capture unredacted.
+
+A query or fragment value of a URL embedded in text, when that value is itself a
+redirect or callback link, is read for a credential of its own the same way such a
+value already is when it sits in a request's own URL or in a form field. Only the
+outer link was read this way before, so a credential nested inside a link embedded
+in a body, a script, or a header with no specific rule reached a capture unredacted.
 """
 
 from __future__ import annotations

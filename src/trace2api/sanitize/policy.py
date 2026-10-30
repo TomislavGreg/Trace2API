@@ -310,9 +310,11 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
     A link embedded in a page, a script, or a JSON value, such as a pagination or
     callback URL, can carry the same credentials a request's own URL does: a username
     and password in its userinfo, a sensitive parameter in its query string, or, for
-    an OAuth implicit grant returning its token that way instead, in its fragment.
-    Only the credential itself is reported, so the rest of the link, and whatever is
-    not a credential, stays as observed.
+    an OAuth implicit grant returning its token that way instead, in its fragment. A
+    query or fragment value that is itself a redirect or callback link is read the same
+    way again, so a credential nested inside the destination the first link points to
+    is found as well. Only the credential itself is reported, so the rest of the link,
+    and whatever is not a credential, stays as observed.
     """
     for url_match in _URL_PATTERN.finditer(text):
         url = url_match.group()
@@ -342,17 +344,35 @@ def _find_pair_secrets(pairs_text: str, offset: int) -> Iterator[EmbeddedSecret]
             continue
         name = unquote(pair.group("name"))
         if is_sensitive_query_name(name):
-            rule = RedactionRule.SENSITIVE_PARAMETER
-        elif is_jwt_shaped(unquote(value)):
-            rule = RedactionRule.JWT_SHAPED_VALUE
-        else:
+            yield EmbeddedSecret(
+                offset + pair.start("value"),
+                offset + pair.end("value"),
+                RedactionRule.SENSITIVE_PARAMETER,
+                name,
+            )
             continue
-        yield EmbeddedSecret(
-            offset + pair.start("value"),
-            offset + pair.end("value"),
-            rule,
-            name,
-        )
+        if is_jwt_shaped(unquote(value)):
+            yield EmbeddedSecret(
+                offset + pair.start("value"),
+                offset + pair.end("value"),
+                RedactionRule.JWT_SHAPED_VALUE,
+                name,
+            )
+            continue
+        # The value is not itself a credential, but it may be a redirect or callback
+        # address carrying one of its own, the same as a link found directly in the
+        # surrounding text already is. Each finding is qualified with the name it sat
+        # under here, so a credential two links deep is still reported by the full path
+        # that reaches it.
+        value_start = offset + pair.start("value")
+        for nested in find_embedded_secrets(value):
+            qualified = name if nested.name is None else f"{name}.{nested.name}"
+            yield EmbeddedSecret(
+                value_start + nested.start,
+                value_start + nested.end,
+                nested.rule,
+                qualified,
+            )
 
 
 def _find_tokens(text: str) -> Iterator[EmbeddedSecret]:
