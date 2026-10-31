@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-31
+
+Redaction hardening. No command, flag, or generated client shape changed; every fix
+below closes a gap where a credential could reach a capture, a display, or a generated
+client unredacted because a particular place it can appear had no rule of its own yet.
+
+### Fixed
+
+- A credential named field is now redacted whether it holds a plain string, a string
+  inside an array, or a string nested a further array level inside that array, and
+  whether the field is named in its singular or plural form.
+- A credential shaped value written into a text body, a multipart form field, or a
+  header this project has no specific rule for is now found and redacted the same way
+  one on a request's own URL or in a JSON field already was.
+- A URL embedded anywhere, including as the value of a query parameter, a form field, or
+  a `Location`, `Referer`, `Link`, or `Refresh` header, is now read for a credential
+  carried by its userinfo, its path, its query string, and its fragment, and for a
+  credential nested one further link inside a redirect or callback address it itself
+  carries.
+
+See the [Ticket Board](README.md#ticket-board) for the individual tickets (T2A-031
+through T2A-051) this release closes.
+
 ## [0.1.0] - 2026-10-07
 
 Initial public release. The full loop described in the README works end to end against
