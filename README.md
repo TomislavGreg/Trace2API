@@ -1344,6 +1344,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-028 | README end to end demo using verified real output. | Done | T2A-027, T2A-020 |
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Done | T2A-001 |
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Done | T2A-028, T2A-029 |
+| T2A-052 | Cut the v0.1.1 release: the v0.1.0 tag described in `RELEASING.md` was never pushed, and the twenty one redaction fixes landed since then (T2A-031 through T2A-051) were never bundled into a versioned, tagged release. | Done | T2A-030 |
 
 ## Development
 
@@ -1607,6 +1608,7 @@ them.
 
 ## Recent Progress
 
+- 2026-10-31 - Released v0.1.1, tagging the redaction hardening landed since v0.1.0 (previously untagged) into a versioned release with its own changelog entry.
 - 2026-10-30 - A query or fragment value of a URL embedded in text is now read for a credential of its own when that value is itself a redirect or callback link, the same way such a value already is on a request's own URL or in a form field, closing a gap where an `api_key` or a userinfo credential one link further in reached a capture unredacted.
 - 2026-10-27 - A URL embedded in text is now read for a username and password in its own userinfo the same way a request or response's own URL already is, closing a gap where a webhook or callback address such as `https://user:pass@host` written into a body, a script, or a header with no specific rule reached a capture unredacted.
 - 2026-10-26 - A URL's own path is now read for a JWT shaped credential the same way free standing text already is, wherever that URL is redacted, closing a gap where a password reset or magic link token carried as a path segment reached a capture unredacted because nothing read the path at all.
@@ -1620,7 +1622,6 @@ them.
 - 2026-10-17 - A redirect's `Location` header is now redacted the same way its `redirect_url` field already was, closing a gap where the identical URL reached a capture unredacted under the header's name even though the field carrying it was sanitized.
 - 2026-10-16 - A credential named or token shaped query parameter carried by a URL embedded in text, such as an `api_key` on a pagination link stored in a JSON field, is now redacted in place, closing a gap where only parameters on the request's own URL were checked.
 - 2026-10-15 - A plain string nested a further array level under a credential named field, such as `{"tokens": [["sk_live_..."]]}`, is now replaced whole as well, closing a gap where only the array's own elements, not an array nested inside it, inherited the field's name.
-- 2026-10-14 - A plain string or number sitting directly in a credential named field's array, such as `{"tokens": ["sk_live_..."]}`, is now replaced whole, closing a gap where such a value previously reached a capture unredacted unless it happened to match a known shape.
 
 ## License
 
