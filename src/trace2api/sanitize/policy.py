@@ -361,15 +361,26 @@ def _find_pair_secrets(pairs_text: str, offset: int) -> Iterator[EmbeddedSecret]
             continue
         # The value is not itself a credential, but it may be a redirect or callback
         # address carrying one of its own, the same as a link found directly in the
-        # surrounding text already is. Each finding is qualified with the name it sat
-        # under here, so a credential two links deep is still reported by the full path
-        # that reaches it.
+        # surrounding text already is. Such an address is written here percent encoded,
+        # since its own `:` and `?` would otherwise be read as part of this one, so it
+        # is decoded before being searched. A credential's own characters are rarely
+        # ones encoding touches, so the text a nested finding names is looked up again
+        # in the still encoded value to recover the span to redact there; a finding
+        # whose text cannot be found this way, because encoding did change it, is left
+        # for the decoded value's own redaction to catch when it is read on its own.
         value_start = offset + pair.start("value")
-        for nested in find_embedded_secrets(value):
+        decoded_value = unquote(value)
+        search_from = 0
+        for nested in find_embedded_secrets(decoded_value):
             qualified = name if nested.name is None else f"{name}.{nested.name}"
+            secret_text = decoded_value[nested.start : nested.end]
+            match_index = value.find(secret_text, search_from)
+            if match_index == -1:
+                continue
+            search_from = match_index + len(secret_text)
             yield EmbeddedSecret(
-                value_start + nested.start,
-                value_start + nested.end,
+                value_start + match_index,
+                value_start + match_index + len(secret_text),
                 nested.rule,
                 qualified,
             )
