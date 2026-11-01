@@ -1003,6 +1003,50 @@ class TestEmbeddedInText:
         assert entry.response.body == response.body
         assert locations == []
 
+    def test_a_credential_nested_inside_a_percent_encoded_linked_url_is_redacted(
+        self,
+    ) -> None:
+        """The same nested callback address reaches a capture percent encoded in
+        practice, since its own `:` and `?` are not valid unescaped inside another
+        URL's query value."""
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "next_page": (
+                        "https://api.example.test/go"
+                        "?redirect_uri=https%3A%2F%2Fpartner.example.test"
+                        "%2Fcb%3Fapi_key%3Dkey-abc123"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "key-abc123" not in text
+        assert "https%3A%2F%2Fpartner.example.test%2Fcb%3Fapi_key%3D" in text
+        assert locations == ["response.body.next_page.redirect_uri.api_key"]
+
+    def test_a_percent_encoded_linked_url_without_a_nested_credential_is_untouched(
+        self,
+    ) -> None:
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "next_page": (
+                        "https://api.example.test/go"
+                        "?redirect_uri=https%3A%2F%2Fpartner.example.test%2Fcb%3Fpage%3D2"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.body == response.body
+        assert locations == []
+
     def test_a_request_body_credential_is_reported_against_the_request(self) -> None:
         """A generated client reads the report to name the variable a value comes back under."""
         body = Body(mime_type="text/plain", text='apiKey: "key-abc123"')
