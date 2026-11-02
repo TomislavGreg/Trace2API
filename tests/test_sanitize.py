@@ -607,6 +607,24 @@ class TestUrlRedaction:
         assert entry.request.url == url
         assert locations == []
 
+    def test_a_credential_carried_by_a_url_nested_in_a_path_segment_is_redacted(self) -> None:
+        """A link shortener or tracking redirect often carries its destination as a
+        path segment, percent encoded, rather than a query value."""
+        url = (
+            "https://go.example.test/r/"
+            "https%3A%2F%2Fpartner.example.test%2Fcb%3Fapi_key%3Dkey-abc123"
+        )
+        entry, locations = redact(make_capture(url=url))
+        assert "key-abc123" not in entry.request.url
+        assert "https%3A%2F%2Fpartner.example.test%2Fcb%3Fapi_key%3D" in entry.request.url
+        assert locations == ["request.url.path.api_key"]
+
+    def test_a_url_nested_in_a_path_segment_without_a_credential_is_untouched(self) -> None:
+        url = "https://go.example.test/r/https%3A%2F%2Fpartner.example.test%2Fcb%3Fpage%3D2"
+        entry, locations = redact(make_capture(url=url))
+        assert entry.request.url == url
+        assert locations == []
+
 
 class TestBodyRedaction:
     def test_json_fields_are_replaced_by_name(self) -> None:
@@ -1038,6 +1056,44 @@ class TestEmbeddedInText:
                     "next_page": (
                         "https://api.example.test/go"
                         "?redirect_uri=https%3A%2F%2Fpartner.example.test%2Fcb%3Fpage%3D2"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.body == response.body
+        assert locations == []
+
+    def test_a_credential_nested_inside_a_linked_urls_path_is_redacted(self) -> None:
+        """A link shortener or tracking redirect handed back in a response can carry
+        its destination as a path segment rather than a query value."""
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "short_link": (
+                        "https://api.example.test/r/"
+                        "https%3A%2F%2Fpartner.example.test%2Fcb%3Fapi_key%3Dkey-abc123"
+                    )
+                }
+            ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "key-abc123" not in text
+        assert "https://api.example.test/r/https%3A%2F%2Fpartner.example.test" in text
+        assert locations == ["response.body.short_link.api_key"]
+
+    def test_a_linked_urls_path_without_a_nested_credential_is_untouched(self) -> None:
+        response = Response(
+            status=200,
+            body=json_body(
+                {
+                    "short_link": (
+                        "https://api.example.test/r/"
+                        "https%3A%2F%2Fpartner.example.test%2Fcb%3Fpage%3D2"
                     )
                 }
             ),
