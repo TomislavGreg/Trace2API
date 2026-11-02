@@ -8,7 +8,7 @@ avoided: it produces redactions nobody can account for and misses short secrets.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from enum import StrEnum
 from typing import NamedTuple
 from urllib.parse import unquote, urlsplit
@@ -19,6 +19,7 @@ __all__ = [
     "EmbeddedSecret",
     "RedactionRule",
     "find_embedded_secrets",
+    "find_path_secrets",
     "is_jwt_shaped",
     "is_sensitive_header",
     "is_sensitive_name",
@@ -239,17 +240,37 @@ def find_embedded_secrets(text: str) -> tuple[EmbeddedSecret, ...]:
     reach the same text, the wider finding stands, and a name outranks a shape over the
     same span: a token assigned to a named field is reported as the field it was given to.
     """
-    candidates = sorted(
+    return _without_overlaps(
         (
             *_find_assignments(text),
             *_find_meta_content(text),
             *_find_url_secrets(text),
             *_find_tokens(text),
-        ),
-        key=lambda item: (item.start, -item.end),
+        )
     )
+
+
+def find_path_secrets(path: str) -> tuple[EmbeddedSecret, ...]:
+    """Return the credentials carried by a URL's own path.
+
+    A bare credential shaped value, such as a JWT carried as a password reset or magic
+    link token, is found the same way free standing text already is. A redirect or
+    callback URL nested inside a path segment, percent encoded the way a link shortener
+    or tracking redirect actually carries one, is read for a credential of its own the
+    same way one nested in a query or fragment value already is.
+    """
+    return _without_overlaps((*find_embedded_secrets(path), *_find_in_decoded(path, 0)))
+
+
+def _without_overlaps(candidates: Iterable[EmbeddedSecret]) -> tuple[EmbeddedSecret, ...]:
+    """Return ``candidates`` in order, dropping one that starts inside an earlier one.
+
+    Where two findings reach the same span, the wider one stands, and a name outranks a
+    shape over the same span: a token assigned to a named field is reported as the field
+    it was given to.
+    """
     found: list[EmbeddedSecret] = []
-    for candidate in candidates:
+    for candidate in sorted(candidates, key=lambda item: (item.start, -item.end)):
         if found and candidate.start < found[-1].end:
             continue
         found.append(candidate)
@@ -313,8 +334,10 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
     an OAuth implicit grant returning its token that way instead, in its fragment. A
     query or fragment value that is itself a redirect or callback link is read the same
     way again, so a credential nested inside the destination the first link points to
-    is found as well. Only the credential itself is reported, so the rest of the link,
-    and whatever is not a credential, stays as observed.
+    is found as well, and so is one nested inside the link's own path, the way a link
+    shortener or tracking redirect carries its destination as a path segment rather
+    than a query value. Only the credential itself is reported, so the rest of the
+    link, and whatever is not a credential, stays as observed.
     """
     for url_match in _URL_PATTERN.finditer(text):
         url = url_match.group()
@@ -328,6 +351,9 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
                 RedactionRule.URL_USERINFO,
                 "userinfo",
             )
+        if parts.path:
+            path_start = url_match.start() + len(parts.scheme) + 3 + len(parts.netloc)
+            yield from _find_in_decoded(parts.path, path_start)
         if parts.query:
             query_start = url_match.start() + url.index("?") + 1
             yield from _find_pair_secrets(parts.query, query_start)
@@ -361,29 +387,41 @@ def _find_pair_secrets(pairs_text: str, offset: int) -> Iterator[EmbeddedSecret]
             continue
         # The value is not itself a credential, but it may be a redirect or callback
         # address carrying one of its own, the same as a link found directly in the
-        # surrounding text already is. Such an address is written here percent encoded,
-        # since its own `:` and `?` would otherwise be read as part of this one, so it
-        # is decoded before being searched. A credential's own characters are rarely
-        # ones encoding touches, so the text a nested finding names is looked up again
-        # in the still encoded value to recover the span to redact there; a finding
-        # whose text cannot be found this way, because encoding did change it, is left
-        # for the decoded value's own redaction to catch when it is read on its own.
+        # surrounding text already is. Each finding is qualified with the name it sat
+        # under here, so a credential two links deep is still reported by the full path
+        # that reaches it.
         value_start = offset + pair.start("value")
-        decoded_value = unquote(value)
-        search_from = 0
-        for nested in find_embedded_secrets(decoded_value):
+        for nested in _find_in_decoded(value, value_start):
             qualified = name if nested.name is None else f"{name}.{nested.name}"
-            secret_text = decoded_value[nested.start : nested.end]
-            match_index = value.find(secret_text, search_from)
-            if match_index == -1:
-                continue
-            search_from = match_index + len(secret_text)
-            yield EmbeddedSecret(
-                value_start + match_index,
-                value_start + match_index + len(secret_text),
-                nested.rule,
-                qualified,
-            )
+            yield EmbeddedSecret(nested.start, nested.end, nested.rule, qualified)
+
+
+def _find_in_decoded(encoded: str, offset: int) -> Iterator[EmbeddedSecret]:
+    """Yield the credentials of a value nested inside ``encoded``, decoding it first.
+
+    A redirect or callback link carried as a query value, a fragment value, or a path
+    segment is written there percent encoded, since its own `:`, `?`, and `/` are not
+    valid unescaped in any of those. ``encoded`` is decoded before being searched. A
+    credential's own characters are rarely ones percent encoding touches, so the text a
+    finding names is looked up again in the still encoded value to recover the span to
+    redact there; a finding whose text cannot be found this way, because encoding did
+    change it, is left for the decoded value's own redaction to catch when it is read
+    on its own.
+    """
+    decoded = unquote(encoded)
+    search_from = 0
+    for nested in find_embedded_secrets(decoded):
+        secret_text = decoded[nested.start : nested.end]
+        match_index = encoded.find(secret_text, search_from)
+        if match_index == -1:
+            continue
+        search_from = match_index + len(secret_text)
+        yield EmbeddedSecret(
+            offset + match_index,
+            offset + match_index + len(secret_text),
+            nested.rule,
+            nested.name,
+        )
 
 
 def _find_tokens(text: str) -> Iterator[EmbeddedSecret]:

@@ -68,6 +68,14 @@ redirect or callback link, is read for a credential of its own the same way such
 value already is when it sits in a request's own URL or in a form field. Only the
 outer link was read this way before, so a credential nested inside a link embedded
 in a body, a script, or a header with no specific rule reached a capture unredacted.
+
+A redirect or callback link carried as the path of another URL, percent encoded the
+way a link shortener or tracking redirect actually carries one, is read for a
+credential of its own the same way one carried by a query or fragment value already
+is. Only those two locations were read this way before, so a credential nested
+inside a link's own path, whether that URL is a request's own, a `Location` or
+`Referer` header, or one embedded in a body, a script, or a header with no specific
+rule, reached a capture unredacted.
 """
 
 from __future__ import annotations
@@ -77,7 +85,7 @@ import hmac
 import json
 import re
 import secrets
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any, NamedTuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -87,8 +95,10 @@ from trace2api.models import Body, Capture, Entry, Header, Headers, Request, Res
 from trace2api.sanitize.policy import (
     COOKIE_HEADERS,
     CREDENTIAL_SCHEME_HEADERS,
+    EmbeddedSecret,
     RedactionRule,
     find_embedded_secrets,
+    find_path_secrets,
     is_jwt_shaped,
     is_sensitive_header,
     is_sensitive_name,
@@ -328,7 +338,10 @@ class _Redactor:
             # than a query parameter, such as /reset-password/<jwt>. It carries no
             # name of its own to judge, so only a value recognized by shape, such as
             # a JWT, is caught here; an opaque identifier that is not is left alone.
-            path = self._redact_text(path, f"{location}.path")
+            # A path segment can also be a redirect or callback link of its own,
+            # percent encoded the way a link shortener or tracking redirect carries
+            # one, the same as such a link nested in a query or fragment value is.
+            path = self._redact_text(path, f"{location}.path", finder=find_path_secrets)
 
         query = parts.query
         if query:
@@ -563,13 +576,21 @@ class _Redactor:
             return body
         return body.model_copy(update={"text": redacted})
 
-    def _redact_text(self, text: str, location: str) -> str:
+    def _redact_text(
+        self,
+        text: str,
+        location: str,
+        *,
+        finder: Callable[[str], tuple[EmbeddedSecret, ...]] = find_embedded_secrets,
+    ) -> str:
         """Replace the credential shaped values in ``text``, leaving the rest of it alone.
 
         Only the values move. What surrounds them is what tells a later stage where the
         request came from, and a page with its scripts blanked would explain nothing.
+        ``finder`` is only ever overridden for a URL's own path, which is searched the
+        same way plus for a redirect or callback link nested inside it.
         """
-        found = find_embedded_secrets(text)
+        found = finder(text)
         if not found:
             return text
         pieces: list[str] = []
