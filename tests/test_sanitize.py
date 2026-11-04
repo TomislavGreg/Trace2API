@@ -233,6 +233,19 @@ class TestPolicy:
         text = "https://api.example.test/go?redirect_uri=https://partner.example.test/cb?page=2"
         assert find_embedded_secrets(text) == ()
 
+    def test_a_credential_in_a_custom_scheme_callback_is_found(self) -> None:
+        """A mobile app's OAuth callback is a custom scheme such as `myapp://`, handed
+        to a webview rather than sent to a server, not an ordinary web address."""
+        text = "redirecting to myapp://oauth/callback?code=abc123&state=xyz for the app"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.SENSITIVE_PARAMETER]
+        assert text[found[0].start : found[0].end] == "abc123"
+        assert found[0].name == "code"
+
+    def test_a_custom_scheme_callback_without_a_credential_is_left_alone(self) -> None:
+        text = "redirecting to myapp://oauth/callback?state=xyz for the app"
+        assert find_embedded_secrets(text) == ()
+
 
 class TestHeaderRedaction:
     def test_authorization_keeps_its_scheme(self) -> None:
@@ -1097,6 +1110,32 @@ class TestEmbeddedInText:
                     )
                 }
             ),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None
+        assert entry.response.body == response.body
+        assert locations == []
+
+    def test_a_custom_scheme_callback_credential_in_a_body_is_redacted(self) -> None:
+        """A mobile app's OAuth callback is a custom scheme such as `myapp://`, handed
+        to a webview rather than sent to a server, not an ordinary web address."""
+        response = Response(
+            status=200,
+            body=json_body({"redirect_to": "myapp://oauth/callback?code=abc123&state=xyz"}),
+        )
+        entry, locations = redact(make_capture(response=response))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "abc123" not in text
+        assert "myapp://oauth/callback?code=" in text
+        assert locations == ["response.body.redirect_to.code"]
+
+    def test_a_custom_scheme_callback_in_a_body_without_a_credential_is_untouched(
+        self,
+    ) -> None:
+        response = Response(
+            status=200,
+            body=json_body({"redirect_to": "myapp://oauth/callback?state=xyz"}),
         )
         entry, locations = redact(make_capture(response=response))
         assert entry.response is not None

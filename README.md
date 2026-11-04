@@ -1096,6 +1096,10 @@ capture taken once, is what `trace2api benchmark` reports.
   callback link, percent encoded the way a link shortener or tracking redirect actually
   carries one, is read for a credential nested one link further in, whether the outer
   URL is a request's own, a `Location` or `Referer` header, or one embedded in text.
+  A URL embedded in text is recognized under any scheme, not only `http` and `https`,
+  so a mobile app's OAuth callback such as `myapp://oauth/callback?code=...`, handed to
+  a webview rather than sent to a server, carries the same protection an ordinary web
+  address already does.
 - HAR 1.2 import from a file or an already parsed document, covering requests,
   responses, headers, payloads, timings, and resource types, with failures that name the
   position in the archive that caused them.
@@ -1289,6 +1293,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-051 | Redact a credential carried by a query or fragment value of a URL embedded in text, when that value is itself a redirect or callback link, which previously reached a capture unredacted because only such a value on a request's own URL or in a form field was read for a credential nested one link further in. | Done | T2A-003 |
 | T2A-053 | Redact a credential carried by a redirect or callback URL nested inside another URL's query or fragment value, when that nested URL is percent encoded the way it actually appears in captured traffic, which previously reached a capture unredacted because the search for a credential nested one link further in read the still encoded text rather than the address it decodes to. | Done | T2A-051 |
 | T2A-054 | Redact a credential carried by a redirect or callback URL nested inside another URL's path segment, the way a link shortener or tracking redirect carries its destination there instead of in a query value, which previously reached a capture unredacted because only a nested URL in a query or fragment value was read this way, never one carried by the outer URL's path. | Done | T2A-053 |
+| T2A-055 | Redact a credential carried by a URL embedded in text under a custom scheme, such as the `myapp://oauth/callback?code=...` a mobile app's OAuth flow hands to a webview, which previously reached a capture unredacted because the embedded URL search only recognized `http` and `https` schemes. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1614,6 +1619,7 @@ them.
 
 ## Recent Progress
 
+- 2026-11-04 - A URL embedded in text is now read for a credential under any scheme, not only `http` and `https`, closing a gap where a mobile app's OAuth callback such as `myapp://oauth/callback?code=...`, handed to a webview rather than sent to a server, reached a capture unredacted because the embedded URL search recognized only ordinary web addresses.
 - 2026-11-02 - A redirect or callback URL nested inside another URL's path segment is now read for a credential of its own, the way a link shortener or tracking redirect carries its destination there instead of in a query value, closing a gap where an `api_key` one link further in reached a capture unredacted because only a nested URL in a query or fragment value was read this way.
 - 2026-11-01 - A redirect or callback URL nested inside another URL's query or fragment value is now read for a credential of its own when it is percent encoded, the way such a nested address actually appears in captured traffic, closing a gap where an `api_key` one link further in reached a capture unredacted because the search for it read the still encoded text rather than the address it decodes to.
 - 2026-10-31 - Released v0.1.1, tagging the redaction hardening landed since v0.1.0 (previously untagged) into a versioned release with its own changelog entry.
