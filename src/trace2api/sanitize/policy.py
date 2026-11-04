@@ -130,8 +130,13 @@ _EMBEDDED_TOKEN = re.compile(
 )
 """A JSON Web Token written into surrounding text, recognized by shape alone."""
 
-_URL_PATTERN = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
-"""A URL written into text, such as a pagination link or a callback address."""
+_URL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+", re.IGNORECASE)
+"""A URL written into text, such as a pagination link or a callback address.
+
+The scheme is read as broadly as RFC 3986 allows rather than limited to ``http`` and
+``https``, since a mobile app's OAuth callback is a custom scheme such as
+``com.example.app://`` or ``myapp://`` just as often as it is an ordinary web address,
+and either one can carry the same credential shaped query or fragment value."""
 
 _URL_QUERY_PAIR = re.compile(r"(?P<name>[^&=]*)=(?P<value>[^&]*)")
 
@@ -329,7 +334,8 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
     """Yield the credential shaped parts of a URL written into text.
 
     A link embedded in a page, a script, or a JSON value, such as a pagination or
-    callback URL, can carry the same credentials a request's own URL does: a username
+    callback URL, or a mobile app's custom scheme OAuth callback such as
+    ``myapp://oauth/callback``, can carry the same credentials a request's own URL does: a username
     and password in its userinfo, a sensitive parameter in its query string, or, for
     an OAuth implicit grant returning its token that way instead, in its fragment. A
     query or fragment value that is itself a redirect or callback link is read the same

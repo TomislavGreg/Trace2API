@@ -76,6 +76,11 @@ is. Only those two locations were read this way before, so a credential nested
 inside a link's own path, whether that URL is a request's own, a `Location` or
 `Referer` header, or one embedded in a body, a script, or a header with no specific
 rule, reached a capture unredacted.
+
+A URL embedded in text is now recognized by any scheme, not only `http` and
+`https`. A mobile app's OAuth callback is commonly a custom scheme such as
+`myapp://oauth/callback?code=...`, handed to a webview rather than a server, and it
+had passed through untouched because only a web address was ever read this way.
 """
 
 from __future__ import annotations
