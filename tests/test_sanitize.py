@@ -246,6 +246,41 @@ class TestPolicy:
         text = "redirecting to myapp://oauth/callback?state=xyz for the app"
         assert find_embedded_secrets(text) == ()
 
+    def test_a_credential_in_a_protocol_relative_url_is_found(self) -> None:
+        """A page commonly links a resource without a scheme, such as
+        `//cdn.example.test/asset`, so it loads over whichever scheme the page itself
+        did, and the same credential shaped query value an absolute link carries can
+        sit on one of these just as well."""
+        text = "see //cdn.example.test/api?api_key=key-abc123 for more"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.SENSITIVE_PARAMETER]
+        assert text[found[0].start : found[0].end] == "key-abc123"
+        assert found[0].name == "api_key"
+
+    def test_a_protocol_relative_url_without_a_credential_is_left_alone(self) -> None:
+        assert find_embedded_secrets("see //cdn.example.test/api?page=2 for more") == ()
+
+    def test_userinfo_in_a_protocol_relative_url_is_found(self) -> None:
+        text = "callback at //demo:hunter2@app.example.test/webhook for details"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.URL_USERINFO]
+        assert text[found[0].start : found[0].end] == "demo:hunter2"
+        assert found[0].name == "userinfo"
+
+    def test_a_credential_nested_in_a_protocol_relative_urls_path_is_found(self) -> None:
+        text = f"see //cdn.example.test/r/{FAKE_JWT} for more"
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.JWT_SHAPED_VALUE]
+        assert text[found[0].start : found[0].end] == FAKE_JWT
+
+    def test_a_double_slash_comment_opener_is_left_alone(self) -> None:
+        """A line comment opener is not mistaken for a protocol-relative link just
+        because it also starts with two slashes."""
+        assert find_embedded_secrets("// TODO: check this api_key=key-abc123 later") == ()
+
+    def test_a_bare_double_slash_in_a_path_is_left_alone(self) -> None:
+        assert find_embedded_secrets("a//b/c?api_key=key-abc123") == ()
+
 
 class TestHeaderRedaction:
     def test_authorization_keeps_its_scheme(self) -> None:

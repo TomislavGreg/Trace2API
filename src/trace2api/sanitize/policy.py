@@ -138,6 +138,18 @@ The scheme is read as broadly as RFC 3986 allows rather than limited to ``http``
 ``com.example.app://`` or ``myapp://`` just as often as it is an ordinary web address,
 and either one can carry the same credential shaped query or fragment value."""
 
+_PROTOCOL_RELATIVE_URL_PATTERN = re.compile(
+    r"(?<![\w:./])//(?:[^\s\"'<>@/]+@)?(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}"
+    r"(?::\d+)?(?:[/?#][^\s\"'<>]*)?"
+)
+"""A protocol-relative URL written into text, such as ``//cdn.example.com/asset``.
+
+A page or a script commonly links a resource this way so it is fetched over whichever
+scheme the page itself was, and the same credential shaped query, fragment, or userinfo
+``_URL_PATTERN`` already reads on an absolute link can sit on one of these just as well.
+The host is required to carry a dotted label and a letter led top level domain, which
+is what keeps an ordinary comment opener or a bare ``//`` inside a path from matching."""
+
 _URL_QUERY_PAIR = re.compile(r"(?P<name>[^&=]*)=(?P<value>[^&]*)")
 
 _HTML_META_TAG = re.compile(r"""<meta\b(?:"[^"]*"|'[^']*'|[^<>"'])*>""", re.IGNORECASE)
@@ -334,8 +346,10 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
     """Yield the credential shaped parts of a URL written into text.
 
     A link embedded in a page, a script, or a JSON value, such as a pagination or
-    callback URL, or a mobile app's custom scheme OAuth callback such as
-    ``myapp://oauth/callback``, can carry the same credentials a request's own URL does: a username
+    callback URL, a mobile app's custom scheme OAuth callback such as
+    ``myapp://oauth/callback``, or a protocol-relative link such as
+    ``//cdn.example.com/asset`` left to be fetched over whichever scheme the page
+    itself was, can carry the same credentials a request's own URL does: a username
     and password in its userinfo, a sensitive parameter in its query string, or, for
     an OAuth implicit grant returning its token that way instead, in its fragment. A
     query or fragment value that is itself a redirect or callback link is read the same
@@ -345,27 +359,42 @@ def _find_url_secrets(text: str) -> Iterator[EmbeddedSecret]:
     than a query value. Only the credential itself is reported, so the rest of the
     link, and whatever is not a credential, stays as observed.
     """
-    for url_match in _URL_PATTERN.finditer(text):
-        url = url_match.group()
-        parts = urlsplit(url)
-        if parts.username is not None or parts.password is not None:
-            netloc_start = url_match.start() + url.index("://") + 3
-            userinfo = parts.netloc.rpartition("@")[0]
-            yield EmbeddedSecret(
-                netloc_start,
-                netloc_start + len(userinfo),
-                RedactionRule.URL_USERINFO,
-                "userinfo",
-            )
-        if parts.path:
-            path_start = url_match.start() + len(parts.scheme) + 3 + len(parts.netloc)
-            yield from _find_in_decoded(parts.path, path_start)
-        if parts.query:
-            query_start = url_match.start() + url.index("?") + 1
-            yield from _find_pair_secrets(parts.query, query_start)
-        if parts.fragment:
-            fragment_start = url_match.start() + url.index("#") + 1
-            yield from _find_pair_secrets(parts.fragment, fragment_start)
+    matches = sorted(
+        (*_URL_PATTERN.finditer(text), *_PROTOCOL_RELATIVE_URL_PATTERN.finditer(text)),
+        key=lambda match: match.start(),
+    )
+    for url_match in matches:
+        yield from _find_matched_url_secrets(url_match)
+
+
+def _find_matched_url_secrets(url_match: re.Match[str]) -> Iterator[EmbeddedSecret]:
+    """Yield the credential shaped parts of one URL already matched in text.
+
+    The netloc always starts right after the first ``//``, whether that pair of
+    slashes was introduced by a scheme, as in ``https://``, or opens the link on its
+    own, as a protocol-relative one does, so locating it this way reads either kind of
+    link the same way without caring which it was.
+    """
+    url = url_match.group()
+    parts = urlsplit(url)
+    netloc_start = url_match.start() + url.index("//") + 2
+    if parts.username is not None or parts.password is not None:
+        userinfo = parts.netloc.rpartition("@")[0]
+        yield EmbeddedSecret(
+            netloc_start,
+            netloc_start + len(userinfo),
+            RedactionRule.URL_USERINFO,
+            "userinfo",
+        )
+    if parts.path:
+        path_start = netloc_start + len(parts.netloc)
+        yield from _find_in_decoded(parts.path, path_start)
+    if parts.query:
+        query_start = url_match.start() + url.index("?") + 1
+        yield from _find_pair_secrets(parts.query, query_start)
+    if parts.fragment:
+        fragment_start = url_match.start() + url.index("#") + 1
+        yield from _find_pair_secrets(parts.fragment, fragment_start)
 
 
 def _find_pair_secrets(pairs_text: str, offset: int) -> Iterator[EmbeddedSecret]:
