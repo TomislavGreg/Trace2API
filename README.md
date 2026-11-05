@@ -1294,6 +1294,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-053 | Redact a credential carried by a redirect or callback URL nested inside another URL's query or fragment value, when that nested URL is percent encoded the way it actually appears in captured traffic, which previously reached a capture unredacted because the search for a credential nested one link further in read the still encoded text rather than the address it decodes to. | Done | T2A-051 |
 | T2A-054 | Redact a credential carried by a redirect or callback URL nested inside another URL's path segment, the way a link shortener or tracking redirect carries its destination there instead of in a query value, which previously reached a capture unredacted because only a nested URL in a query or fragment value was read this way, never one carried by the outer URL's path. | Done | T2A-053 |
 | T2A-055 | Redact a credential carried by a URL embedded in text under a custom scheme, such as the `myapp://oauth/callback?code=...` a mobile app's OAuth flow hands to a webview, which previously reached a capture unredacted because the embedded URL search only recognized `http` and `https` schemes. | Done | T2A-003 |
+| T2A-056 | Redact a credential carried by a protocol-relative URL embedded in text, such as `//cdn.example.com/asset?api_key=...`, which previously reached a capture unredacted because the embedded URL search only recognized a link that named a scheme of its own. | Done | T2A-003 |
 
 ### Phase 1: HAR to code
 
@@ -1619,6 +1620,7 @@ them.
 
 ## Recent Progress
 
+- 2026-11-05 - A protocol-relative URL embedded in text, such as `//cdn.example.com/asset?api_key=...`, is now read for a credential of its own the same way an absolute link already is, closing a gap where one reached a capture unredacted because the embedded URL search required a link to name a scheme.
 - 2026-11-04 - A URL embedded in text is now read for a credential under any scheme, not only `http` and `https`, closing a gap where a mobile app's OAuth callback such as `myapp://oauth/callback?code=...`, handed to a webview rather than sent to a server, reached a capture unredacted because the embedded URL search recognized only ordinary web addresses.
 - 2026-11-02 - A redirect or callback URL nested inside another URL's path segment is now read for a credential of its own, the way a link shortener or tracking redirect carries its destination there instead of in a query value, closing a gap where an `api_key` one link further in reached a capture unredacted because only a nested URL in a query or fragment value was read this way.
 - 2026-11-01 - A redirect or callback URL nested inside another URL's query or fragment value is now read for a credential of its own when it is percent encoded, the way such a nested address actually appears in captured traffic, closing a gap where an `api_key` one link further in reached a capture unredacted because the search for it read the still encoded text rather than the address it decodes to.
@@ -1632,8 +1634,6 @@ them.
 - 2026-10-22 - A query parameter or a form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a `redirect_uri` or `return_to` value reached a capture unredacted.
 - 2026-10-21 - A response's `Refresh` header is now read for the same credential shaped query values a page's own `<meta http-equiv="refresh">` element already is, closing a gap where a `session_token` or similar value on its destination reached a capture unredacted under the header's name.
 - 2026-10-20 - A response's `Link` header is now read for the same credential shaped query values a pagination link embedded in a body already is, closing a gap where an `api_key` or similar value on a next or previous page link reached a capture unredacted under the header's name.
-- 2026-10-19 - A request's `Referer` header is now redacted the same way its own `url` field already was, closing a gap where the page address a browser sent along, query string and all, reached a capture unredacted under the header's name.
-- 2026-10-17 - A redirect's `Location` header is now redacted the same way its `redirect_url` field already was, closing a gap where the identical URL reached a capture unredacted under the header's name even though the field carrying it was sanitized.
 
 ## License
 

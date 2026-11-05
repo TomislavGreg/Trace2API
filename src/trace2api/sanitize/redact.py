@@ -81,6 +81,13 @@ A URL embedded in text is now recognized by any scheme, not only `http` and
 `https`. A mobile app's OAuth callback is commonly a custom scheme such as
 `myapp://oauth/callback?code=...`, handed to a webview rather than a server, and it
 had passed through untouched because only a web address was ever read this way.
+
+A protocol-relative URL embedded in text, such as `//cdn.example.com/asset`, is now
+read for a credential the same way an absolute one already is. A page commonly links
+a resource this way so it loads over whichever scheme the page itself was, and the
+same credential shaped query, fragment, or userinfo an absolute link carries can sit
+on one of these just as well; only a link that named its own scheme was recognized
+before.
 """
 
 from __future__ import annotations
