@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-11-08
+
+More redaction hardening, continuing from v0.1.1. No command, flag, or generated client
+shape changed; every fix below closes a gap in how a URL nested or embedded in text is
+read for a credential of its own.
+
+### Fixed
+
+- A URL nested inside another URL's query or fragment value is now read for a credential
+  of its own even when it is percent encoded, the way such a nested address actually
+  appears in captured traffic, and the same nested URL carried instead as a path segment,
+  such as a link shortener's destination, is now read for one the same way.
+- A URL embedded in text under a custom scheme, such as a mobile app's OAuth callback, and
+  a protocol-relative URL with no scheme of its own, are now read for a credential the
+  same way an ordinary `http` or `https` address already is.
+
+See the [Ticket Board](README.md#ticket-board) for the individual tickets (T2A-053
+through T2A-056) this release closes.
+
+Also tags `v0.1.0` and `v0.1.1` on the commits each was already cut from. Both releases
+above were recorded in this changelog when they shipped, but the tag `RELEASING.md` calls
+for was never actually pushed for either one.
+
 ## [0.1.1] - 2026-10-31
 
 Redaction hardening. No command, flag, or generated client shape changed; every fix
