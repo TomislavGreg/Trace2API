@@ -24,9 +24,8 @@ read for a credential of its own.
 See the [Ticket Board](README.md#ticket-board) for the individual tickets (T2A-053
 through T2A-056) this release closes.
 
-Also tags `v0.1.0` and `v0.1.1` on the commits each was already cut from. Both releases
-above were recorded in this changelog when they shipped, but the tag `RELEASING.md` calls
-for was never actually pushed for either one.
+The `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for have still not been
+pushed. See T2A-057 on the Ticket Board for the blocker.
 
 ## [0.1.1] - 2026-10-31
 

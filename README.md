@@ -1357,7 +1357,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-029 | Installation and packaging polish for `pipx` and `uvx` where supported. | Done | T2A-001 |
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Done | T2A-028, T2A-029 |
 | T2A-052 | Cut the v0.1.1 release: the v0.1.0 tag described in `RELEASING.md` was never pushed, and the twenty one redaction fixes landed since then (T2A-031 through T2A-051) were never bundled into a versioned, tagged release. | Done | T2A-030 |
-| T2A-057 | Cut the v0.1.2 release, bundling the four redaction fixes landed since v0.1.1 (T2A-053 through T2A-056), and push the `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for: none of the three had ever reached the remote, despite two prior release tickets recording that step as done. | Done | T2A-052 |
+| T2A-057 | Cut the v0.1.2 release, bundling the four redaction fixes landed since v0.1.1 (T2A-053 through T2A-056). The version bump and changelog entry are in; pushing the `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for is not, since both a tag push over `git push` and a tag ref created through the GitHub REST API are refused by the environment's write access controls, and no alternate remote is configured. | Blocked | T2A-052 |
 
 ## Development
 
@@ -1621,7 +1621,7 @@ them.
 
 ## Recent Progress
 
-- 2026-11-08 - Released v0.1.2, bundling the redaction fixes landed since v0.1.1 into a versioned changelog entry, and pushed the `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for, none of which had actually reached the remote before now.
+- 2026-11-08 - Released v0.1.2, bundling the redaction fixes landed since v0.1.1 into a versioned changelog entry. The `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for still have not reached the remote; pushing a tag is refused by the environment's write access controls the same way a workflow file change already was.
 - 2026-11-05 - A protocol-relative URL embedded in text, such as `//cdn.example.com/asset?api_key=...`, is now read for a credential of its own the same way an absolute link already is, closing a gap where one reached a capture unredacted because the embedded URL search required a link to name a scheme.
 - 2026-11-04 - A URL embedded in text is now read for a credential under any scheme, not only `http` and `https`, closing a gap where a mobile app's OAuth callback such as `myapp://oauth/callback?code=...`, handed to a webview rather than sent to a server, reached a capture unredacted because the embedded URL search recognized only ordinary web addresses.
 - 2026-11-02 - A redirect or callback URL nested inside another URL's path segment is now read for a credential of its own, the way a link shortener or tracking redirect carries its destination there instead of in a query value, closing a gap where an `api_key` one link further in reached a capture unredacted because only a nested URL in a query or fragment value was read this way.
