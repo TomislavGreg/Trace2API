@@ -43,6 +43,7 @@ class RedactionRule(StrEnum):
     URL_USERINFO = "url-userinfo"
     EMBEDDED_ASSIGNMENT = "embedded-assignment"
     EMBEDDED_META_CONTENT = "embedded-meta-content"
+    EMBEDDED_FORM_FIELD_VALUE = "embedded-form-field-value"
 
 
 CREDENTIAL_SCHEME_HEADERS = frozenset({"authorization", "proxy-authorization"})
@@ -155,12 +156,18 @@ _URL_QUERY_PAIR = re.compile(r"(?P<name>[^&=]*)=(?P<value>[^&]*)")
 _HTML_META_TAG = re.compile(r"""<meta\b(?:"[^"]*"|'[^']*'|[^<>"'])*>""", re.IGNORECASE)
 """A ``meta`` element. Quoted attributes are read whole, since a value can hold ``>``."""
 
+_HTML_INPUT_TAG = re.compile(r"""<input\b(?:"[^"]*"|'[^']*'|[^<>"'])*>""", re.IGNORECASE)
+"""An ``input`` element, read the same way a ``meta`` element already is."""
+
 _HTML_ATTRIBUTE = re.compile(
     r"""(?P<name>[A-Za-z_:][A-Za-z0-9_:.\-]*)\s*=\s*(?P<quote>["'])(?P<value>[^"']*)(?P=quote)"""
 )
 
 _META_NAMING_ATTRIBUTES = frozenset({"id", "itemprop", "name", "property"})
 """Attributes that say what a ``meta`` element carries. Its value is in ``content``."""
+
+_INPUT_NAMING_ATTRIBUTES = frozenset({"name"})
+"""The attribute that says what an ``input`` element carries. Its value is in ``value``."""
 
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9_:.\-]{1,64}")
 """What a reported field name may look like.
@@ -261,6 +268,7 @@ def find_embedded_secrets(text: str) -> tuple[EmbeddedSecret, ...]:
         (
             *_find_assignments(text),
             *_find_meta_content(text),
+            *_find_input_values(text),
             *_find_url_secrets(text),
             *_find_tokens(text),
         )
@@ -318,13 +326,53 @@ def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
     A page hands a token to its own scripts this way, and the name saying what the value
     is sits in a different attribute from the value itself.
     """
-    for tag in _HTML_META_TAG.finditer(text):
+    yield from _find_tag_attribute_secrets(
+        text,
+        _HTML_META_TAG,
+        _META_NAMING_ATTRIBUTES,
+        "content",
+        RedactionRule.EMBEDDED_META_CONTENT,
+    )
+
+
+def _find_input_values(text: str) -> Iterator[EmbeddedSecret]:
+    """Yield the ``value`` of every ``input`` element whose ``name`` names a credential.
+
+    A server renders a CSRF token, or a session or form token, straight into a hidden
+    field, such as ``<input type="hidden" name="csrf_token" value="...">``, the same way
+    a page hands one to its own scripts through a ``meta`` element. The name saying what
+    the value is sits in its own ``name`` attribute rather than in the attribute carrying
+    the value, so neither a named assignment nor a bare shape finds it on its own.
+    """
+    yield from _find_tag_attribute_secrets(
+        text,
+        _HTML_INPUT_TAG,
+        _INPUT_NAMING_ATTRIBUTES,
+        "value",
+        RedactionRule.EMBEDDED_FORM_FIELD_VALUE,
+    )
+
+
+def _find_tag_attribute_secrets(
+    text: str,
+    tag_pattern: re.Pattern[str],
+    naming_attributes: frozenset[str],
+    value_attribute: str,
+    rule: RedactionRule,
+) -> Iterator[EmbeddedSecret]:
+    """Yield ``value_attribute`` of every match of ``tag_pattern`` named by a credential.
+
+    One attribute says what the element carries, by name, and a different attribute
+    holds the value itself; this is shared between a ``meta`` element's ``content`` and
+    an ``input`` element's ``value``.
+    """
+    for tag in tag_pattern.finditer(text):
         attributes = list(_HTML_ATTRIBUTE.finditer(tag.group()))
         named = next(
             (
                 attribute.group("value")
                 for attribute in attributes
-                if attribute.group("name").lower() in _META_NAMING_ATTRIBUTES
+                if attribute.group("name").lower() in naming_attributes
                 and _PLAIN_NAME.fullmatch(attribute.group("value"))
                 and is_sensitive_name(attribute.group("value"))
             ),
@@ -333,11 +381,11 @@ def _find_meta_content(text: str) -> Iterator[EmbeddedSecret]:
         if named is None:
             continue
         for attribute in attributes:
-            if attribute.group("name").lower() == "content" and attribute.group("value"):
+            if attribute.group("name").lower() == value_attribute and attribute.group("value"):
                 yield EmbeddedSecret(
                     tag.start() + attribute.start("value"),
                     tag.start() + attribute.end("value"),
-                    RedactionRule.EMBEDDED_META_CONTENT,
+                    rule,
                     named,
                 )
 
