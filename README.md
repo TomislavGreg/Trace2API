@@ -1160,9 +1160,10 @@ Captures contain credentials by nature. Trace2API treats that as a primary const
   that caused it. It reports what it removed by location and rule, never by value.
 - A body that is not a structure redaction can read is read as text. A page hands its own
   scripts a CSRF token that appears nowhere else in a workflow, so a credential named
-  field assigned a quoted value, a `meta` element naming what it carries, and a token
-  written out in full are all replaced where they sit. Only the values move: the markup
-  and code around them are left as observed, because the analysis stages read them.
+  field assigned a quoted value, a `meta` element naming what it carries, a hidden form
+  field doing the same, and a token written out in full are all replaced where they sit.
+  Only the values move: the markup and code around them are left as observed, because the
+  analysis stages read them.
 - Binary payloads are the exception. Nothing in them can be located without decoding a
   format redaction does not claim to understand, so they are left alone, and a secret in
   one is removed only where it also appears in a header, a query string, or a structured
@@ -1358,6 +1359,7 @@ Statuses: Backlog, Ready, In Progress, Review, Blocked, Done.
 | T2A-030 | v0.1 release checklist, versioning, changelog, and release notes. | Done | T2A-028, T2A-029 |
 | T2A-052 | Cut the v0.1.1 release: the v0.1.0 tag described in `RELEASING.md` was never pushed, and the twenty one redaction fixes landed since then (T2A-031 through T2A-051) were never bundled into a versioned, tagged release. | Done | T2A-030 |
 | T2A-057 | Cut the v0.1.2 release, bundling the four redaction fixes landed since v0.1.1 (T2A-053 through T2A-056). The version bump and changelog entry are in; pushing the `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for is not, since both a tag push over `git push` and a tag ref created through the GitHub REST API are refused by the environment's write access controls, and no alternate remote is configured. | Blocked | T2A-052 |
+| T2A-058 | Redact a credential carried by a hidden form field's `value` attribute, such as `<input type="hidden" name="csrf_token" value="...">`, which previously reached a capture unredacted because only a `meta` element's `content` attribute was read this way. | Done | T2A-003 |
 
 ## Development
 
@@ -1621,6 +1623,7 @@ them.
 
 ## Recent Progress
 
+- 2026-11-11 - A hidden form field's `value` attribute is now read for a credential the same way a `meta` element's `content` already is, closing a gap where a server rendered CSRF, session, or form token such as `<input type="hidden" name="csrf_token" value="...">` reached a capture unredacted because the field's name sits in a separate attribute from its value.
 - 2026-11-08 - Released v0.1.2, bundling the redaction fixes landed since v0.1.1 into a versioned changelog entry. The `v0.1.0`, `v0.1.1`, and `v0.1.2` tags `RELEASING.md` calls for still have not reached the remote; pushing a tag is refused by the environment's write access controls the same way a workflow file change already was.
 - 2026-11-05 - A protocol-relative URL embedded in text, such as `//cdn.example.com/asset?api_key=...`, is now read for a credential of its own the same way an absolute link already is, closing a gap where one reached a capture unredacted because the embedded URL search required a link to name a scheme.
 - 2026-11-04 - A URL embedded in text is now read for a credential under any scheme, not only `http` and `https`, closing a gap where a mobile app's OAuth callback such as `myapp://oauth/callback?code=...`, handed to a webview rather than sent to a server, reached a capture unredacted because the embedded URL search recognized only ordinary web addresses.
@@ -1634,7 +1637,6 @@ them.
 - 2026-10-24 - A URL's fragment is now read for credential shaped values the same way its query string already is, wherever that URL is redacted, closing a gap where an OAuth implicit grant's `access_token` reached a capture unredacted because only a URL's query string was checked this way.
 - 2026-10-23 - A multipart form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a field such as `redirect_uri` reached a capture unredacted because only a JSON string or a form field was read for an embedded URL this way.
 - 2026-10-22 - A query parameter or a form field whose own value is a redirect or callback address is now read for the same credential shaped query values that address would carry on a request of its own, closing a gap where an `api_key` or similar value nested inside a `redirect_uri` or `return_to` value reached a capture unredacted.
-- 2026-10-21 - A response's `Refresh` header is now read for the same credential shaped query values a page's own `<meta http-equiv="refresh">` element already is, closing a gap where a `session_token` or similar value on its destination reached a capture unredacted under the header's name.
 
 ## License
 

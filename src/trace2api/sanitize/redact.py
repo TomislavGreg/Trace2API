@@ -88,6 +88,13 @@ a resource this way so it loads over whichever scheme the page itself was, and t
 same credential shaped query, fragment, or userinfo an absolute link carries can sit
 on one of these just as well; only a link that named its own scheme was recognized
 before.
+
+A hidden form field's `value` attribute is now read for a credential the same way a
+`meta` element's `content` already is. A server commonly renders a CSRF, session, or
+form token straight into markup this way, such as
+`<input type="hidden" name="csrf_token" value="...">`, and it had passed through
+untouched because the field's name sits in its own `name` attribute rather than in the
+attribute carrying the value, so neither a named assignment nor a bare shape caught it.
 """
 
 from __future__ import annotations

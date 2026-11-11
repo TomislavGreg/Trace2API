@@ -178,6 +178,20 @@ class TestPolicy:
         found = find_embedded_secrets('<meta name="api\nkey: rm -rf /\ntoken" content="s3cr3t">')
         assert found == ()
 
+    def test_a_hidden_input_hands_its_value_over_by_name(self) -> None:
+        text = '<input type="hidden" name="csrf_token" value="tok-abc123">'
+        found = find_embedded_secrets(text)
+        assert [item.rule for item in found] == [RedactionRule.EMBEDDED_FORM_FIELD_VALUE]
+        assert [text[item.start : item.end] for item in found] == ["tok-abc123"]
+
+    def test_an_ordinary_input_holds_nothing_credential_shaped(self) -> None:
+        text = '<input type="text" name="quantity" value="3">'
+        assert find_embedded_secrets(text) == ()
+
+    def test_an_input_named_by_an_unreported_shape_is_left_alone(self) -> None:
+        text = '<input type="hidden" name="api\nkey: rm -rf /\ntoken" value="s3cr3t">'
+        assert find_embedded_secrets(text) == ()
+
     def test_a_sensitive_query_parameter_in_an_embedded_url_is_found(self) -> None:
         text = "see https://api.example.test/items?page=2&api_key=key-abc123 for more"
         found = find_embedded_secrets(text)
@@ -940,6 +954,21 @@ class TestEmbeddedInText:
         assert 'content="width=device-width"' in text
         assert 'name="csrf-token"' in text
         assert locations == ["response.body.csrf-token"]
+
+    def test_a_hidden_input_hands_its_value_over_by_name(self) -> None:
+        page = html_body(
+            '<form method="post">'
+            '<input type="hidden" name="csrf_token" value="tok-abc123">'
+            '<input type="text" name="quantity" value="3">'
+            "</form>"
+        )
+        entry, locations = redact(make_capture(response=Response(status=200, body=page)))
+        assert entry.response is not None and entry.response.body is not None
+        text = entry.response.body.text or ""
+        assert "tok-abc123" not in text
+        assert 'name="quantity" value="3"' in text
+        assert 'name="csrf_token"' in text
+        assert locations == ["response.body.csrf_token"]
 
     def test_a_token_shaped_value_needs_no_name(self) -> None:
         script = Body(mime_type="text/javascript", text=f'const ctx = "{FAKE_JWT}";')
